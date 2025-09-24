@@ -50,7 +50,7 @@ struct PreferencesView: View {
             Divider()
             contentArea
         }
-        .frame(width: 720, height: 480)
+        .frame(width: 820, height: 480)
     }
 
     private var sidebar: some View {
@@ -96,10 +96,12 @@ struct PreferencesView: View {
                     case .general:       generalView
                     }
                 }
-                .padding(.trailing, 8)
+                .padding(.horizontal, 10)
             }
         }
         .padding(16)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(.ultraThinMaterial)
     }
 
     private var transcriptionView: some View {
@@ -325,7 +327,7 @@ except Exception as e:
             let output = String(data: data, encoding: .utf8) ?? ""
             DispatchQueue.main.async {
                 self.testPythonInProgress = false
-                var text = resultText.isEmpty ? output : (resultText + "\n" + output)
+                let text = resultText.isEmpty ? output : (resultText + "\n" + output)
                 let lines = text.split(separator: "\n").map(String.init)
                 var pyPath: String?
                 var whPath: String?

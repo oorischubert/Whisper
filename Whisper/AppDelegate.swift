@@ -53,20 +53,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     private func buildMenu() -> NSMenu {
         let menu = NSMenu()
-        let startStop = NSMenuItem(title: isRecording ? "Stop Recording" : "Start Recording", action: #selector(handleStartStop), keyEquivalent: "")
+        menu.autoenablesItems = false
+
+        let startStop = NSMenuItem(title: "", action: #selector(handleStartStop), keyEquivalent: "")
         startStop.target = self
+        startStop.toolTip = isRecording ? "Stop Recording" : "Start Recording"
+        startStop.image = makeMenuImage(systemName: isRecording ? "pause.fill" : "play.fill")
         menu.addItem(startStop)
 
         menu.addItem(NSMenuItem.separator())
 
-        let prefs = NSMenuItem(title: "Preferences", action: #selector(openPreferences), keyEquivalent: "")
+        let prefs = NSMenuItem(title: "", action: #selector(openPreferences), keyEquivalent: "")
         prefs.target = self
+        prefs.toolTip = "Settings"
+        prefs.image = makeMenuImage(systemName: "gearshape")
         menu.addItem(prefs)
 
         menu.addItem(NSMenuItem.separator())
 
-        let quit = NSMenuItem(title: "Quit Whisper", action: #selector(quitApp), keyEquivalent: "")
+        let quit = NSMenuItem(title: "", action: #selector(quitApp), keyEquivalent: "")
         quit.target = self
+        quit.toolTip = "Quit Whisper"
+        quit.image = makeMenuImage(systemName: "xmark.circle")
         menu.addItem(quit)
         return menu
     }
@@ -174,7 +182,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
         let vc = NSHostingController(rootView: PreferencesView())
         let w = NSWindow(contentViewController: vc)
-        w.title = "Whisper Preferences"
+        w.title = "Whisper Settings"
         w.styleMask = [.titled, .closable, .miniaturizable]
         w.center()
         let wc = NSWindowController(window: w)
@@ -185,6 +193,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     @objc private func quitApp() {
         NSApp.terminate(self)
+    }
+
+    private func makeMenuImage(systemName: String) -> NSImage? {
+        let configuration = NSImage.SymbolConfiguration(pointSize: 18, weight: .semibold)
+        guard let base = NSImage(systemSymbolName: systemName, accessibilityDescription: nil) else {
+            return nil
+        }
+        let configured = base.withSymbolConfiguration(configuration) ?? base
+        configured.isTemplate = true
+        return configured
     }
 
     private func notify(_ title: String, subtitle: String?) {
