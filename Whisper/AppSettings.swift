@@ -40,7 +40,10 @@ final class AppSettings: ObservableObject {
     }
 
     @Published var apiKey: String? {
-        didSet { defaults.set(apiKey, forKey: Keys.apiKey) }
+        didSet {
+            KeychainStore.apiKey = apiKey?.trimmingCharacters(in: .whitespacesAndNewlines)
+            defaults.removeObject(forKey: Keys.apiKey)
+        }
     }
 
     @Published var apiModel: String {
@@ -56,6 +59,10 @@ final class AppSettings: ObservableObject {
             defaults.set(launchAtLogin, forKey: Keys.launchAtLogin)
             applyLaunchAtLogin()
         }
+    }
+
+    @Published var hasCompletedOnboarding: Bool {
+        didSet { defaults.set(hasCompletedOnboarding, forKey: Keys.hasCompletedOnboarding) }
     }
 
     // Ephemeral debug value (not persisted)
@@ -90,16 +97,22 @@ final class AppSettings: ObservableObject {
         let hk = UInt32(defaults.integer(forKey: Keys.hotkeyKeyCode))
         self.hotkeyKeyCode = (hk == 0) ? 96 : hk // F5 default
         self.useAPI = defaults.object(forKey: Keys.useAPI) as? Bool ?? false
-        self.apiKey = defaults.string(forKey: Keys.apiKey)
+        let legacyAPIKey = defaults.string(forKey: Keys.apiKey)
+        self.apiKey = KeychainStore.apiKey ?? legacyAPIKey
         self.apiModel = defaults.string(forKey: Keys.apiModel) ?? "whisper-1"
         self.language = defaults.string(forKey: Keys.language) ?? "auto"
         self.launchAtLogin = defaults.object(forKey: Keys.launchAtLogin) as? Bool ?? false
+        self.hasCompletedOnboarding = defaults.bool(forKey: Keys.hasCompletedOnboarding)
         self.debugPasteToXcode = defaults.object(forKey: Keys.debugPasteToXcode) as? Bool ?? false
         let ck = defaults.integer(forKey: Keys.comboKeyCode)
         self.comboKeyCode = ck == 0 ? 0 : UInt16(ck)
         let cmRaw = defaults.object(forKey: Keys.comboModifiers) as? UInt ?? NSEvent.ModifierFlags.control.rawValue
         self.comboModifiers = NSEvent.ModifierFlags(rawValue: cmRaw)
         self.debugShowPopup = defaults.object(forKey: Keys.debugShowPopup) as? Bool ?? false
+        if KeychainStore.apiKey == nil, let legacyAPIKey, !legacyAPIKey.isEmpty {
+            KeychainStore.apiKey = legacyAPIKey
+        }
+        defaults.removeObject(forKey: Keys.apiKey)
         applyLaunchAtLogin()
     }
 
@@ -199,6 +212,7 @@ final class AppSettings: ObservableObject {
         static let comboKeyCode = "comboKeyCode"
         static let comboModifiers = "comboModifiers"
         static let debugShowPopup = "debugShowPopup"
+        static let hasCompletedOnboarding = "hasCompletedOnboarding"
     }
 
     private func applyLaunchAtLogin() {

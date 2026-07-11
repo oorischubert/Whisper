@@ -1,70 +1,82 @@
 import AppKit
-import Foundation
+import ApplicationServices
+
+struct PasteboardSnapshot {
+    struct Item {
+        let values: [NSPasteboard.PasteboardType: Data]
+    }
+
+    let items: [Item]
+
+    static func capture(from pasteboard: NSPasteboard) -> PasteboardSnapshot {
+        let items = (pasteboard.pasteboardItems ?? []).map { item in
+            Item(values: Dictionary(uniqueKeysWithValues: item.types.compactMap { type in
+                item.data(forType: type).map { (type, $0) }
+            }))
+        }
+        return PasteboardSnapshot(items: items)
+    }
+
+    @discardableResult
+    func restore(to pasteboard: NSPasteboard, ifUnchangedSince changeCount: Int) -> Bool {
+        guard pasteboard.changeCount == changeCount else { return false }
+        let restoredItems: [NSPasteboardItem] = items.map { snapshot in
+            let item = NSPasteboardItem()
+            snapshot.values.forEach { type, data in item.setData(data, forType: type) }
+            return item
+        }
+        pasteboard.clearContents()
+        guard !restoredItems.isEmpty else { return true }
+        return pasteboard.writeObjects(restoredItems)
+    }
+}
 
 enum PasteboardManager {
     static func paste(text: String, pressEnter: Bool, preserveClipboard: Bool) -> Bool {
         let sanitized = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !sanitized.isEmpty else { return true }
+        guard !sanitized.isEmpty else { return false }
 
-        let pb = NSPasteboard.general
-        var previous: String?
-        // For the very first paste of the app session, never preserve to avoid race on initial paste
-        let effectivePreserve = preserveClipboard && !firstPaste
-        if effectivePreserve {
-            previous = pb.string(forType: .string)
-        }
+        let pasteboard = NSPasteboard.general
+        let snapshot = preserveClipboard ? PasteboardSnapshot.capture(from: pasteboard) : nil
+        pasteboard.clearContents()
+        guard pasteboard.setString(sanitized, forType: .string) else { return false }
+        let transcriptChangeCount = pasteboard.changeCount
 
-        pb.clearContents()
-        pb.setString(sanitized, forType: .string)
+        let pasted = sendCommandV()
+        let submitted = !pressEnter || (pasted && sendEnter())
 
-        // Give the pasteboard a moment to commit before sending Cmd+V
-        let commitDeadline = Date().addingTimeInterval(0.2)
-        while Date() < commitDeadline {
-            if pb.string(forType: .string) == sanitized { break }
-            Thread.sleep(forTimeInterval: 0.01)
-        }
-
-        let okPaste = sendCmdV()
-        var okEnter = true
-        if okPaste && pressEnter {
-            okEnter = sendEnter()
-        }
-        // Delay restoring previous clipboard until paste is likely completed.
-        // Use a longer delay for the very first paste of the session.
-        if effectivePreserve, let prev = previous {
-            let delay: TimeInterval = firstPaste ? 0.7 : 0.35
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                pb.clearContents()
-                pb.setString(prev, forType: .string)
+        // If pasting is unavailable, leave the transcript on the clipboard as a safe fallback.
+        if pasted, let snapshot {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+                snapshot.restore(to: pasteboard, ifUnchangedSince: transcriptChangeCount)
             }
         }
-        if firstPaste { firstPaste = false }
-        return okPaste && okEnter
+        return pasted && submitted
     }
 
-    private static var firstPaste = true
-
-    private static func sendCmdV() -> Bool {
-        guard let src = CGEventSource(stateID: .hidSystemState) else { return false }
-        let vKey: CGKeyCode = 9 // kVK_ANSI_V
-        let down = CGEvent(keyboardEventSource: src, virtualKey: vKey, keyDown: true)
-        down?.flags = .maskCommand
-        let up = CGEvent(keyboardEventSource: src, virtualKey: vKey, keyDown: false)
-        up?.flags = .maskCommand
-        let loc = CGEventTapLocation.cghidEventTap
-        down?.post(tap: loc)
-        up?.post(tap: loc)
+    private static func sendCommandV() -> Bool {
+        guard AXIsProcessTrusted(),
+              let source = CGEventSource(stateID: .hidSystemState),
+              let down = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: true),
+              let up = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: false) else {
+            return false
+        }
+        down.flags = .maskCommand
+        up.flags = .maskCommand
+        down.post(tap: .cghidEventTap)
+        up.post(tap: .cghidEventTap)
         return true
     }
 
     private static func sendEnter() -> Bool {
-        guard let src = CGEventSource(stateID: .hidSystemState) else { return false }
-        let enterKey: CGKeyCode = 36 // kVK_Return
-        let down = CGEvent(keyboardEventSource: src, virtualKey: enterKey, keyDown: true)
-        let up = CGEvent(keyboardEventSource: src, virtualKey: enterKey, keyDown: false)
-        let loc = CGEventTapLocation.cghidEventTap
-        down?.post(tap: loc)
-        up?.post(tap: loc)
+        guard AXIsProcessTrusted(),
+              let source = CGEventSource(stateID: .hidSystemState),
+              let down = CGEvent(keyboardEventSource: source, virtualKey: 36, keyDown: true),
+              let up = CGEvent(keyboardEventSource: source, virtualKey: 36, keyDown: false) else {
+            return false
+        }
+        down.post(tap: .cghidEventTap)
+        up.post(tap: .cghidEventTap)
         return true
     }
 }

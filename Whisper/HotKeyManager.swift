@@ -28,7 +28,7 @@ final class HotKeyManager {
             return noErr
         }, 1, &eventSpec, selfPtr, &eventHandler)
 
-        var hotKeyID = EventHotKeyID(signature: OSType(UInt32(truncatingIfNeeded: FourCharCode("WSPR"))), id: 1)
+        let hotKeyID = EventHotKeyID(signature: OSType(UInt32(truncatingIfNeeded: FourCharCode("WSPR"))), id: 1)
         RegisterEventHotKey(UInt32(keyCode), 0, hotKeyID, GetEventDispatcherTarget(), 0, &hotKeyRef)
     }
 
@@ -54,7 +54,7 @@ final class HotKeyManager {
             return noErr
         }, 1, &eventSpec, selfPtr, &eventHandler)
 
-        var hotKeyID = EventHotKeyID(signature: OSType(UInt32(truncatingIfNeeded: FourCharCode("WSPR"))), id: 1)
+        let hotKeyID = EventHotKeyID(signature: OSType(UInt32(truncatingIfNeeded: FourCharCode("WSPR"))), id: 1)
         var ref: EventHotKeyRef?
         RegisterEventHotKey(UInt32(newKeyCode), 0, hotKeyID, GetEventDispatcherTarget(), 0, &ref)
         self.hotKeyRef = ref

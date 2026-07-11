@@ -1,6 +1,10 @@
 import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
+import AVFoundation
+import ApplicationServices
+import UserNotifications
+import ServiceManagement
 
 struct PreferencesView: View {
     @StateObject private var settings = AppSettings.shared
@@ -23,13 +27,18 @@ struct PreferencesView: View {
         ("Hindi", "hi"),
         ("Turkish", "tr")
     ]
-    @State private var tab: PrefsTab = .transcription
+    @State private var tab: PrefsTab
     private let labelWidth: CGFloat = 160
 
-    enum PrefsTab: String, CaseIterable, Identifiable { case transcription, pasting, general
+    init(initialTab: PrefsTab = .transcription) {
+        _tab = State(initialValue: initialTab)
+    }
+
+    enum PrefsTab: String, CaseIterable, Identifiable { case setup, transcription, pasting, general
         var id: String { rawValue }
         var title: String {
             switch self {
+            case .setup: return "Setup"
             case .transcription: return "Transcription"
             case .pasting: return "Pasting"
             case .general: return "General"
@@ -37,6 +46,7 @@ struct PreferencesView: View {
         }
         var symbol: String {
             switch self {
+            case .setup: return "checkmark.circle"
             case .transcription: return "waveform"
             case .pasting: return "rectangle.and.paperclip"
             case .general: return "gearshape"
@@ -91,6 +101,7 @@ struct PreferencesView: View {
             ScrollView {
                 Group {
                     switch tab {
+                    case .setup:         setupView
                     case .transcription: transcriptionView
                     case .pasting:       pastingView
                     case .general:       generalView
@@ -102,6 +113,145 @@ struct PreferencesView: View {
         .padding(16)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(.ultraThinMaterial)
+    }
+
+    @State private var microphoneStatus = AVCaptureDevice.authorizationStatus(for: .audio)
+    @State private var accessibilityEnabled = AXIsProcessTrusted()
+    @State private var notificationStatus: UNAuthorizationStatus = .notDetermined
+
+    private var setupView: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            SectionCard(
+                title: "Ready when you are",
+                subtitle: "Whisper only needs access to the capabilities you choose to use."
+            ) {
+                PermissionRow(
+                    symbol: "mic.fill",
+                    title: "Microphone",
+                    detail: microphoneDetail,
+                    isReady: microphoneStatus == .authorized,
+                    actionTitle: microphoneStatus == .authorized ? nil : "Allow"
+                ) {
+                    requestMicrophoneAccess()
+                }
+
+                Divider()
+
+                PermissionRow(
+                    symbol: "keyboard.fill",
+                    title: "Accessibility",
+                    detail: accessibilityEnabled
+                        ? "Ready to paste transcripts into other apps."
+                        : "Required for automatic Command–V pasting.",
+                    isReady: accessibilityEnabled,
+                    actionTitle: accessibilityEnabled ? nil : "Open Settings"
+                ) {
+                    HotKeyManager.requestAccessibilityIfNeeded()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1) { refreshPermissionStatuses() }
+                }
+
+                Divider()
+
+                PermissionRow(
+                    symbol: "bell.badge.fill",
+                    title: "Notifications",
+                    detail: notificationDetail,
+                    isReady: notificationStatus == .authorized || notificationStatus == .provisional,
+                    actionTitle: notificationStatus == .notDetermined ? "Enable" : nil
+                ) {
+                    requestNotificationAccess()
+                }
+            }
+
+            SectionCard(title: "Transcription engine") {
+                PermissionRow(
+                    symbol: settings.useAPI ? "cloud.fill" : "laptopcomputer",
+                    title: settings.useAPI ? "OpenAI API" : "Local Whisper",
+                    detail: engineReadiness.detail,
+                    isReady: engineReadiness.ready,
+                    actionTitle: engineReadiness.ready ? nil : "Configure"
+                ) {
+                    tab = .transcription
+                }
+            }
+
+            HStack {
+                Text("You can revisit this checklist from Settings at any time.")
+                    .font(.footnote)
+                    .foregroundColor(.secondary)
+                Spacer()
+                Button(settings.hasCompletedOnboarding ? "Done" : "Finish Setup") {
+                    settings.hasCompletedOnboarding = true
+                    tab = .transcription
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(microphoneStatus != .authorized)
+            }
+        }
+        .onAppear { refreshPermissionStatuses() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            refreshPermissionStatuses()
+        }
+    }
+
+    private var microphoneDetail: String {
+        switch microphoneStatus {
+        case .authorized: return "Ready to record audio."
+        case .denied, .restricted: return "Blocked. Enable access in Privacy & Security settings."
+        case .notDetermined: return "Required to record speech for transcription."
+        @unknown default: return "Microphone permission status is unavailable."
+        }
+    }
+
+    private var notificationDetail: String {
+        switch notificationStatus {
+        case .authorized, .provisional, .ephemeral: return "Completion and error alerts are enabled."
+        case .denied: return "Disabled. The menu-bar status still works without alerts."
+        case .notDetermined: return "Optional alerts when a transcript is ready."
+        @unknown default: return "Notification permission status is unavailable."
+        }
+    }
+
+    private var engineReadiness: (ready: Bool, detail: String) {
+        if settings.useAPI {
+            let ready = !(settings.apiKey ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            return (ready, ready ? "API key is stored securely in Keychain." : "Add an API key to use cloud transcription.")
+        }
+        guard let path = settings.resolvePythonExecutable() else {
+            return (false, "Choose a Python installation containing openai-whisper.")
+        }
+        return (
+            FileManager.default.isExecutableFile(atPath: path),
+            FileManager.default.isExecutableFile(atPath: path)
+                ? "Python is configured. Use Test to verify the Whisper package."
+                : "The configured Python path is not executable."
+        )
+    }
+
+    private func requestMicrophoneAccess() {
+        if microphoneStatus == .denied || microphoneStatus == .restricted {
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
+                NSWorkspace.shared.open(url)
+            }
+            return
+        }
+        AVCaptureDevice.requestAccess(for: .audio) { _ in
+            DispatchQueue.main.async { refreshPermissionStatuses() }
+        }
+    }
+
+    private func requestNotificationAccess() {
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in
+            DispatchQueue.main.async { refreshPermissionStatuses() }
+        }
+    }
+
+    private func refreshPermissionStatuses() {
+        microphoneStatus = AVCaptureDevice.authorizationStatus(for: .audio)
+        accessibilityEnabled = AXIsProcessTrusted()
+        UNUserNotificationCenter.current().getNotificationSettings { status in
+            DispatchQueue.main.async { notificationStatus = status.authorizationStatus }
+        }
     }
 
     private var transcriptionView: some View {
@@ -242,6 +392,11 @@ struct PreferencesView: View {
         VStack(alignment: .leading, spacing: 16) {
             SectionCard(title: "General") {
                 Toggle("Launch at login", isOn: $settings.launchAtLogin)
+                if #available(macOS 13.0, *) {
+                    Text(launchAtLoginDetail)
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
+                }
             }
 
             SectionCard(title: "Hotkey", subtitle: "Choose the system-wide shortcut to trigger transcription.") {
@@ -255,6 +410,19 @@ struct PreferencesView: View {
                 .allowsHitTesting(!isCapturingHotkey)
             }
         }
+    }
+
+    private var launchAtLoginDetail: String {
+        if #available(macOS 13.0, *) {
+            switch SMAppService.mainApp.status {
+            case .enabled: return "Whisper will start when you log in."
+            case .requiresApproval: return "Approval is required in Login Items settings."
+            case .notRegistered: return "Whisper is not registered as a login item."
+            case .notFound: return "Login-item registration is unavailable for this build."
+            @unknown default: return "Login-item status is unavailable."
+            }
+        }
+        return ""
     }
 
     private func browseForPython() {
@@ -439,7 +607,7 @@ except Exception as e:
         if mods.contains(.option) { parts.append("Opt") }
         if mods.contains(.shift) { parts.append("Shift") }
         if mods.contains(.command) { parts.append("Cmd") }
-        let keyName = keyDisplayName(for: code)
+        let keyName = Self.keyDisplayName(for: code)
         parts.append(keyName)
         return parts.joined(separator: " + ")
     }
@@ -451,13 +619,13 @@ except Exception as e:
         if mods.contains(.shift)   { s += "⇧" }
         if mods.contains(.command) { s += "⌘" }
         if let code {
-            let name = keyDisplayName(for: code)
+            let name = Self.keyDisplayName(for: code)
             s += (s.isEmpty ? "" : " ") + name
         }
         return s.isEmpty ? "Waiting…" : s
     }
 
-    private func keyDisplayName(for code: UInt16) -> String {
+    static func keyDisplayName(for code: UInt16) -> String {
         switch code {
         case 0: return "A"
         case 1: return "S"
@@ -471,13 +639,48 @@ except Exception as e:
         case 31: return "O"
         case 34: return "I"
         case 32: return "U"
-        case 1: return "S"
         case 17: return "T"
         case 16: return "Y"
-        case 0x22: return "?"
         case 49: return "Space"
         case 53: return "Esc"
         default: return "Key \(code)"
+        }
+    }
+
+    private struct PermissionRow: View {
+        let symbol: String
+        let title: String
+        let detail: String
+        let isReady: Bool
+        let actionTitle: String?
+        let action: () -> Void
+
+        var body: some View {
+            HStack(spacing: 12) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .fill(isReady ? Color.green.opacity(0.14) : Color.orange.opacity(0.14))
+                    Image(systemName: symbol)
+                        .foregroundColor(isReady ? .green : .orange)
+                }
+                .frame(width: 38, height: 38)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        Text(title).fontWeight(.medium)
+                        Image(systemName: isReady ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+                            .foregroundColor(isReady ? .green : .orange)
+                            .accessibilityLabel(isReady ? "Ready" : "Needs attention")
+                    }
+                    Text(detail)
+                        .font(.footnote)
+                        .foregroundColor(.secondary)
+                }
+                Spacer(minLength: 12)
+                if let actionTitle {
+                    Button(actionTitle, action: action)
+                }
+            }
         }
     }
 
