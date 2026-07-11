@@ -13,27 +13,40 @@ final class HUDWindowController: NSWindowController {
         panel.backgroundColor = .clear
         panel.isOpaque = false
         panel.hidesOnDeactivate = false
-        let vev = NSVisualEffectView(frame: contentRect)
-        vev.material = .hudWindow
-        vev.state = .active
-        vev.wantsLayer = true
-        vev.layer?.cornerRadius = 12
 
-        label.font = NSFont.systemFont(ofSize: 13)
+        label.font = NSFont.systemFont(ofSize: 14, weight: .medium)
         label.textColor = .labelColor
         label.lineBreakMode = .byWordWrapping
         label.maximumNumberOfLines = 4
         label.translatesAutoresizingMaskIntoConstraints = false
 
-        vev.addSubview(label)
+        // Container that hosts the label with consistent insets across styles.
+        let container = NSView(frame: contentRect)
+        container.addSubview(label)
         NSLayoutConstraint.activate([
-            label.leadingAnchor.constraint(equalTo: vev.leadingAnchor, constant: 16),
-            label.trailingAnchor.constraint(equalTo: vev.trailingAnchor, constant: -16),
-            label.topAnchor.constraint(equalTo: vev.topAnchor, constant: 16),
-            label.bottomAnchor.constraint(equalTo: vev.bottomAnchor, constant: -16)
+            label.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 18),
+            label.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -18),
+            label.topAnchor.constraint(equalTo: container.topAnchor, constant: 18),
+            label.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -18)
         ])
 
-        panel.contentView = vev
+        if #available(macOS 26.0, *) {
+            // Apple's Liquid Glass surface.
+            let glass = NSGlassEffectView(frame: contentRect)
+            glass.cornerRadius = 18
+            glass.contentView = container
+            panel.contentView = glass
+        } else {
+            let vev = NSVisualEffectView(frame: contentRect)
+            vev.material = .hudWindow
+            vev.state = .active
+            vev.wantsLayer = true
+            vev.layer?.cornerRadius = 14
+            container.autoresizingMask = [.width, .height]
+            vev.addSubview(container)
+            panel.contentView = vev
+        }
+
         super.init(window: panel)
     }
 

@@ -7,11 +7,12 @@ A small macOS menu bar app that records audio on demand, transcribes it with Whi
 - Pastes transcript automatically, with permission-aware copy fallback
 - Can preserve rich clipboard content and optionally press Enter after pasting
 - Shows the last transcript in Preferences for quick copy
+- **Liquid Glass UI**: the Settings window and transcript HUD adopt Apple's Liquid Glass on macOS 26 (Tahoe), with automatic material fallbacks on earlier releases
 
 ## Requirements
 
-- macOS: 13+ recommended. The project’s deployment target is configured for recent macOS (currently set to 15.5 in the project settings). You can lower it if needed.
-- Xcode: 15+ recommended (project created with a recent Xcode version).
+- macOS: built and tested on **macOS 26 (Tahoe)**, where the UI renders with Apple's Liquid Glass. The project's deployment target is set to 15.5, so it still runs on macOS 15+ — on those systems the Liquid Glass surfaces fall back to translucent materials automatically. You can lower the target further if needed.
+- Xcode: **26+** required to build (the Liquid Glass APIs — `glassEffect`, `.buttonStyle(.glass)`, `NSGlassEffectView` — ship in the macOS 26 SDK and are gated behind `#available(macOS 26.0, *)` checks).
 - Microphone permission (requested from the first-run Setup checklist).
 - Accessibility permission (System Settings → Privacy & Security → Accessibility) to paste into other apps.
 - Notifications are optional; the menu-bar status works without them.
@@ -42,7 +43,8 @@ pip install -U openai-whisper
 
 Notes:
 - “Launch at Login” typically requires a codesigned build to take effect.
-- If your machine isn’t on macOS 15 yet, consider lowering the target in the project build settings.
+- Building requires Xcode 26+ (for the macOS 26 SDK and Liquid Glass APIs). The app still launches on macOS 15+; Liquid Glass surfaces degrade to translucent materials there.
+- If you need to support an even older macOS, lower the deployment target in the project build settings — the `#available(macOS 26.0, *)` guards keep it compiling.
 
 ## Using the App
 
@@ -104,10 +106,10 @@ Notes:
 - `Recorder.swift` — Records 16 kHz mono PCM WAV to a temp file.
 - `Transcriber.swift` — Cancellable local/API transcription, timeouts, diagnostics, and temporary-file cleanup.
 - `PasteboardManager.swift` — Rich clipboard preservation, permission-aware paste, and optional Enter keypress.
-- `PreferencesView.swift` — SwiftUI setup checklist and preferences UI.
+- `PreferencesView.swift` — SwiftUI setup checklist and preferences UI, with Liquid Glass helpers (`liquidGlass`/`glassButton`) that adopt `glassEffect` and glass button styles on macOS 26 and fall back to materials on macOS 15.
 - `GlobalShortcutMonitor.swift` — Modern system-wide key combination monitor.
 - `HotKeyManager.swift` — Legacy F-key hotkey helper (not used by default).
-- `HUDWindowController.swift` — Optional popup showing last transcript (debug).
+- `HUDWindowController.swift` — Optional popup showing last transcript (debug); uses `NSGlassEffectView` (Liquid Glass) on macOS 26, `NSVisualEffectView` otherwise.
 - `LoadingAnimator.swift` — Status bar spinner while transcribing.
 - `WhisperTests/CoreBehaviorTests.swift` — State, multipart-form, and clipboard regression tests.
 

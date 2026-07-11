@@ -6,6 +6,48 @@ import ApplicationServices
 import UserNotifications
 import ServiceManagement
 
+// MARK: - Liquid Glass helpers
+
+extension View {
+    /// Applies Apple's Liquid Glass on macOS 26+, gracefully falling back to a
+    /// translucent material with a hairline border on earlier releases.
+    @ViewBuilder
+    func liquidGlass(cornerRadius: CGFloat, tint: Color? = nil, interactive: Bool = false) -> some View {
+        if #available(macOS 26.0, *) {
+            self.glassEffect(
+                Glass.regular.tint(tint).interactive(interactive),
+                in: .rect(cornerRadius: cornerRadius, style: .continuous)
+            )
+        } else {
+            self
+                .background(
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .fill(tint ?? Color(nsColor: .windowBackgroundColor).opacity(0.6))
+                        .background(
+                            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                                .fill(.ultraThinMaterial)
+                        )
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .strokeBorder(Color.primary.opacity(0.06), lineWidth: 1)
+                )
+        }
+    }
+
+    /// A Liquid Glass button style on macOS 26+, bordered elsewhere.
+    @ViewBuilder
+    func glassButton(prominent: Bool = false) -> some View {
+        if #available(macOS 26.0, *) {
+            if prominent { self.buttonStyle(.glassProminent) }
+            else { self.buttonStyle(.glass) }
+        } else {
+            if prominent { self.buttonStyle(.borderedProminent) }
+            else { self.buttonStyle(.bordered) }
+        }
+    }
+}
+
 struct PreferencesView: View {
     @StateObject private var settings = AppSettings.shared
 
@@ -57,47 +99,97 @@ struct PreferencesView: View {
     var body: some View {
         HStack(spacing: 0) {
             sidebar
-            Divider()
             contentArea
         }
-        .frame(width: 820, height: 480)
+        .frame(width: 860, height: 540)
+        .background(windowBackground)
+        .tint(.accentColor)
+    }
+
+    private var windowBackground: some View {
+        ZStack {
+            Color(nsColor: .windowBackgroundColor)
+            LinearGradient(
+                colors: [
+                    Color.accentColor.opacity(0.18),
+                    Color.accentColor.opacity(0.02),
+                    .clear
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        }
+        .ignoresSafeArea()
     }
 
     private var sidebar: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            ForEach(PrefsTab.allCases) { t in
-                Button {
-                    tab = t
-                } label: {
-                    HStack(spacing: 10) {
-                        Image(systemName: t.symbol)
-                        Text(t.title)
-                        Spacer()
-                    }
-                    .padding(.vertical, 8)
-                    .padding(.horizontal, 10)
-                    .background(
-                        RoundedRectangle(cornerRadius: 8)
-                            .fill(tab == t ? Color.accentColor.opacity(0.15) : Color.clear)
-                    )
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 11) {
+                Image(systemName: "waveform")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(.tint)
+                    .frame(width: 36, height: 36)
+                    .liquidGlass(cornerRadius: 11)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Whisper").font(.headline)
+                    Text("Voice to text").font(.caption).foregroundStyle(.secondary)
                 }
-                .buttonStyle(.plain)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 6)
+            .padding(.top, 2)
+            .padding(.bottom, 14)
+
+            ForEach(PrefsTab.allCases) { t in
+                tabButton(t)
             }
             Spacer()
         }
-        .padding(12)
-        .frame(width: 200)
-        .background(.ultraThinMaterial)
+        .padding(14)
+        .frame(width: 214)
+    }
+
+    private func tabButton(_ t: PrefsTab) -> some View {
+        Button {
+            withAnimation(.snappy(duration: 0.28)) { tab = t }
+        } label: {
+            HStack(spacing: 11) {
+                Image(systemName: t.symbol)
+                    .font(.system(size: 14, weight: .medium))
+                    .frame(width: 20)
+                Text(t.title).fontWeight(.medium)
+                Spacer(minLength: 0)
+            }
+            .padding(.vertical, 9)
+            .padding(.horizontal, 12)
+            .foregroundStyle(tab == t ? Color.primary : Color.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background {
+                if tab == t {
+                    Color.clear.liquidGlass(
+                        cornerRadius: 10,
+                        tint: .accentColor.opacity(0.55),
+                        interactive: true
+                    )
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     private var contentArea: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 11) {
                 Image(systemName: tab.symbol)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(.tint)
                 Text(tab.title)
-                    .font(.title3).bold()
+                    .font(.title2).bold()
                 Spacer()
             }
+            .padding(.horizontal, 2)
+
             ScrollView {
                 Group {
                     switch tab {
@@ -107,12 +199,13 @@ struct PreferencesView: View {
                     case .general:       generalView
                     }
                 }
-                .padding(.horizontal, 10)
+                .padding(.horizontal, 2)
+                .padding(.bottom, 8)
             }
+            .scrollContentBackground(.hidden)
         }
-        .padding(16)
+        .padding(20)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(.ultraThinMaterial)
     }
 
     @State private var microphoneStatus = AVCaptureDevice.authorizationStatus(for: .audio)
@@ -184,7 +277,7 @@ struct PreferencesView: View {
                     settings.hasCompletedOnboarding = true
                     tab = .transcription
                 }
-                .buttonStyle(.borderedProminent)
+                .glassButton(prominent: true)
                 .disabled(microphoneStatus != .authorized)
             }
         }
@@ -290,9 +383,10 @@ struct PreferencesView: View {
                             TextField("/opt/homebrew/bin/python3", text: $settings.pythonExecutablePath)
                                 .textFieldStyle(.roundedBorder)
                                 .font(.system(.body, design: .monospaced))
-                            Button("Browse…") { browseForPython() }
-                            Button("Detect") { detectPython() }
+                            Button("Browse…") { browseForPython() }.glassButton()
+                            Button("Detect") { detectPython() }.glassButton()
                             Button(testPythonInProgress ? "Testing…" : "Test") { testPython() }
+                                .glassButton()
                                 .disabled(testPythonInProgress)
                         }
                         Text("Tip: Point to your env’s Python (e.g., ~/miniconda3/envs/whisper/bin/python) so the app runs \"python -m whisper\" inside it.")
@@ -342,14 +436,12 @@ struct PreferencesView: View {
                         Text(settings.lastTranscript.isEmpty ? "(none yet)" : settings.lastTranscript)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .textSelection(.enabled)
+                            .foregroundStyle(settings.lastTranscript.isEmpty ? .secondary : .primary)
                             .font(.system(.body, design: .monospaced))
-                            .padding(10)
-                            .background(
-                                RoundedRectangle(cornerRadius: 8)
-                                    .fill(Color(nsColor: .textBackgroundColor))
-                            )
+                            .padding(12)
                     }
                     .frame(height: 140)
+                    .liquidGlass(cornerRadius: 10)
 
                     HStack {
                         Spacer()
@@ -357,6 +449,7 @@ struct PreferencesView: View {
                             NSPasteboard.general.clearContents()
                             NSPasteboard.general.setString(settings.lastTranscript, forType: .string)
                         }
+                        .glassButton()
                         .disabled(settings.lastTranscript.isEmpty)
                     }
                 }
@@ -381,6 +474,7 @@ struct PreferencesView: View {
                             NSWorkspace.shared.open(url)
                         }
                     }
+                    .glassButton()
                     Spacer()
                 }
                 .padding(.top, 2)
@@ -403,8 +497,12 @@ struct PreferencesView: View {
                 HStack {
                     Text("Hotkey").frame(width: labelWidth, alignment: .trailing)
                     Text(displayHotkey(code: settings.comboKeyCode, mods: settings.comboModifiers))
+                        .font(.system(.body, design: .rounded).weight(.medium))
+                        .padding(.vertical, 5)
+                        .padding(.horizontal, 12)
+                        .liquidGlass(cornerRadius: 8)
                     Spacer()
-                    Button("Change…") { isCapturingHotkey = true }
+                    Button("Change…") { isCapturingHotkey = true }.glassButton()
                 }
                 .overlay(hotkeyCaptureOverlay)
                 .allowsHitTesting(!isCapturingHotkey)
@@ -552,10 +650,9 @@ except Exception as e:
                             .padding(.top, 4)
 
                     }
-                    .padding(24)
-                    .background(.ultraThinMaterial)
-                    .cornerRadius(14)
-                    .shadow(radius: 20, y: 8)
+                    .padding(28)
+                    .liquidGlass(cornerRadius: 18)
+                    .shadow(color: .black.opacity(0.25), radius: 24, y: 10)
                     .transition(.scale.combined(with: .opacity))
                 }
                 .animation(.easeInOut(duration: 0.15), value: isCapturingHotkey)
@@ -656,29 +753,31 @@ except Exception as e:
         let action: () -> Void
 
         var body: some View {
-            HStack(spacing: 12) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .fill(isReady ? Color.green.opacity(0.14) : Color.orange.opacity(0.14))
-                    Image(systemName: symbol)
-                        .foregroundColor(isReady ? .green : .orange)
-                }
-                .frame(width: 38, height: 38)
+            HStack(spacing: 13) {
+                Image(systemName: symbol)
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(isReady ? Color.green : Color.orange)
+                    .frame(width: 40, height: 40)
+                    .liquidGlass(
+                        cornerRadius: 11,
+                        tint: (isReady ? Color.green : Color.orange).opacity(0.18)
+                    )
 
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
                         Text(title).fontWeight(.medium)
                         Image(systemName: isReady ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
-                            .foregroundColor(isReady ? .green : .orange)
+                            .foregroundStyle(isReady ? Color.green : Color.orange)
+                            .font(.caption)
                             .accessibilityLabel(isReady ? "Ready" : "Needs attention")
                     }
                     Text(detail)
                         .font(.footnote)
-                        .foregroundColor(.secondary)
+                        .foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 12)
                 if let actionTitle {
-                    Button(actionTitle, action: action)
+                    Button(actionTitle, action: action).glassButton()
                 }
             }
         }
@@ -698,21 +797,21 @@ except Exception as e:
         }
 
         var body: some View {
-            VStack(alignment: .leading, spacing: 12) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title).font(.headline)
-                    if let subtitle {
-                        Text(subtitle).font(.subheadline).foregroundColor(.secondary)
+            VStack(alignment: .leading, spacing: 14) {
+                if !title.isEmpty {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(title).font(.headline)
+                        if let subtitle {
+                            Text(subtitle).font(.subheadline).foregroundStyle(.secondary)
+                        }
                     }
                 }
                 content
             }
-            .padding(14)
-            .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color(nsColor: .windowBackgroundColor))
-                    .shadow(color: Color.black.opacity(0.08), radius: 12, y: 2)
-            )
+            .padding(18)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .liquidGlass(cornerRadius: 16)
+            .shadow(color: .black.opacity(0.06), radius: 10, y: 3)
         }
     }
 }
