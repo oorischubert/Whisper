@@ -4,6 +4,24 @@ import Combine
 import Carbon.HIToolbox
 @preconcurrency import UserNotifications
 
+/// Whether a transcription failure is worth interrupting the user with.
+/// Free of AppKit so the rule is unit-testable.
+enum TranscriptionFailure {
+    /// A recording this short that comes back empty is a misclick, not a failure:
+    /// there was no time to say anything. Past it an empty transcript is worth
+    /// reporting, since it can mean the mic heard nothing when it should have.
+    static let misclickDuration: TimeInterval = 3.0
+
+    static func deservesAlert(_ error: Error, recordedFor: TimeInterval) -> Bool {
+        // Only an empty transcript is ever written off as a misclick. A real
+        // failure — no Python, a dead key, a rejected request — always reports,
+        // however brief the recording was.
+        guard let error = error as? TranscriberError,
+              case .outputMissing = error else { return true }
+        return recordedFor >= misclickDuration
+    }
+}
+
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     private var statusItem: NSStatusItem!
@@ -239,7 +257,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     private func stopAndTranscribe() {
-        guard activity.isRecording else { return }
+        guard case .recording(let startedAt) = activity else { return }
+        let recordedFor = Date().timeIntervalSince(startedAt)
         // Chime only after the recorder is closed, so it cannot land in the audio.
         let audioURL = recorder.stop()
         SoundPlayer.playStop()
@@ -300,6 +319,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             } catch is CancellationError {
                 notify("Transcription cancelled", subtitle: nil)
             } catch {
+                guard TranscriptionFailure.deservesAlert(error, recordedFor: recordedFor) else { return }
                 showAlert("Transcription failed", message: error.localizedDescription)
             }
         }

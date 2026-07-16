@@ -11,6 +11,36 @@ final class CoreBehaviorTests: XCTestCase {
         XCTAssertTrue(AppActivity.transcribing.isTranscribing)
     }
 
+    func testMisclickRecordingSwallowsAnEmptyTranscript() {
+        // Tapped and released with nothing said: no alert, whichever engine ran.
+        XCTAssertFalse(TranscriptionFailure.deservesAlert(TranscriberError.outputMissing, recordedFor: 0.2))
+        XCTAssertFalse(TranscriptionFailure.deservesAlert(
+            TranscriberError.outputMissing,
+            recordedFor: TranscriptionFailure.misclickDuration - 0.01
+        ))
+    }
+
+    func testDeliberateRecordingReportsAnEmptyTranscript() {
+        // Long enough to have spoken, so silence coming back is worth knowing about.
+        // Bound to the constant so retuning it cannot silently move the boundary.
+        XCTAssertTrue(TranscriptionFailure.deservesAlert(
+            TranscriberError.outputMissing,
+            recordedFor: TranscriptionFailure.misclickDuration
+        ))
+        XCTAssertTrue(TranscriptionFailure.deservesAlert(TranscriberError.outputMissing, recordedFor: 30.0))
+    }
+
+    func testRealFailuresAlwaysReportHoweverBriefTheRecording() {
+        let brief: TimeInterval = 0.2
+        XCTAssertTrue(TranscriptionFailure.deservesAlert(TranscriberError.pythonNotFound, recordedFor: brief))
+        XCTAssertTrue(TranscriptionFailure.deservesAlert(TranscriberError.timedOut, recordedFor: brief))
+        XCTAssertTrue(TranscriptionFailure.deservesAlert(TranscriberError.failedMessage(1, "boom"), recordedFor: brief))
+        XCTAssertTrue(TranscriptionFailure.deservesAlert(
+            NSError(domain: "Whisper", code: -2, userInfo: [NSLocalizedDescriptionKey: "API rejected the key"]),
+            recordedFor: brief
+        ))
+    }
+
     func testMultipartBodyIncludesSelectedFieldsAndAudio() throws {
         let audioURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("multipart-\(UUID().uuidString).wav")
