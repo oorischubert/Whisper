@@ -50,6 +50,8 @@ extension View {
 
 struct PreferencesView: View {
     @StateObject private var settings = AppSettings.shared
+    @StateObject private var remapper = DictationKeyRemapper.shared
+    @State private var micKeyTestResult: MicKeyTestResult?
 
     private let models = ["tiny", "base", "small", "medium", "large"]
     private let languages: [(label: String, code: String)] = [
@@ -507,6 +509,110 @@ struct PreferencesView: View {
                 .overlay(hotkeyCaptureOverlay)
                 .allowsHitTesting(!isCapturingHotkey)
             }
+
+            micKeyCard
+        }
+    }
+
+    // MARK: - Mic Key
+
+    private var micKeyCard: some View {
+        SectionCard(
+            title: "Mic Key",
+            subtitle: "Press the microphone key (F5) to start and stop Whisper instead of opening macOS Dictation."
+        ) {
+            Toggle("Use the mic key to toggle recording", isOn: $settings.dictationKeyEnabled)
+
+            if settings.dictationKeyEnabled {
+                PermissionRow(
+                    symbol: "mic.badge.plus",
+                    title: "Key remap",
+                    detail: micKeyStatusDetail,
+                    isReady: remapper.status == .active,
+                    actionTitle: remapper.status == .active ? nil : "Retry"
+                ) {
+                    Task { await remapper.apply() }
+                }
+
+                HStack(spacing: 10) {
+                    Button(remapper.isTesting ? "Press the mic key…" : "Test") {
+                        startMicKeyTest()
+                    }
+                    .glassButton()
+                    .disabled(remapper.status != .active || remapper.isTesting)
+
+                    if let micKeyTestResult {
+                        Label(micKeyTestResult.message, systemImage: micKeyTestResult.symbol)
+                            .font(.footnote)
+                            .foregroundStyle(micKeyTestResult.isSuccess ? Color.green : Color.orange)
+                    }
+
+                    Spacer()
+
+                    Button("Reset Key Mapping") {
+                        Task { await remapper.remove() }
+                    }
+                    .glassButton()
+                }
+
+                if !settings.launchAtLogin {
+                    Text("Tip: turn on “Launch at login” so the mic key works as soon as you sign in.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Text(micKeyExplanation)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+        .onChange(of: remapper.lastKeyPressAt) { _, _ in
+            micKeyTestResult = .detected
+        }
+    }
+
+    private var micKeyStatusDetail: String {
+        switch remapper.status {
+        case .active:
+            return "The mic key now toggles Whisper. macOS Dictation will not open."
+        case .inactive:
+            return "Not applied yet."
+        case .failed(let message):
+            return "\(message) Your \(displayHotkey(code: settings.comboKeyCode, mods: settings.comboModifiers)) shortcut still works."
+        }
+    }
+
+    private var micKeyExplanation: String {
+        let combo = displayHotkey(code: settings.comboKeyCode, mods: settings.comboModifiers)
+        return "Whisper uses the built-in hidutil tool to remap the mic key system-wide, which is what stops the Dictation panel from opening. The remap is removed when you turn this off or quit Whisper. Your \(combo) shortcut keeps working either way."
+    }
+
+    private func startMicKeyTest() {
+        micKeyTestResult = nil
+        remapper.isTesting = true
+        Task {
+            try? await Task.sleep(for: .seconds(10))
+            guard remapper.isTesting else { return } // a press already resolved it
+            remapper.isTesting = false
+            micKeyTestResult = .notDetected
+        }
+    }
+
+    enum MicKeyTestResult {
+        case detected
+        case notDetected
+
+        var isSuccess: Bool { self == .detected }
+
+        var message: String {
+            switch self {
+            case .detected: return "Mic key detected."
+            case .notDetected: return "No key press detected — Dictation may still be intercepting it."
+            }
+        }
+
+        var symbol: String {
+            isSuccess ? "checkmark.circle.fill" : "exclamationmark.circle.fill"
         }
     }
 

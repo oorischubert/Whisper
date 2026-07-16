@@ -4,6 +4,7 @@ A small macOS menu bar app that records audio on demand, transcribes it with Whi
 
 - Status bar menu: Start/Stop Recording, transcription status/cancellation, Settings, Quit
 - Global hotkey to toggle recording (default: Control+A)
+- Optional: use the mic key (F5) to toggle recording instead of opening macOS Dictation
 - Pastes transcript automatically, with permission-aware copy fallback
 - Can preserve rich clipboard content and optionally press Enter after pasting
 - Shows the last transcript in Preferences for quick copy
@@ -50,6 +51,7 @@ Notes:
 
 - On first launch, complete the Setup checklist. It reports microphone, Accessibility, notifications, and transcription-engine readiness without prompting for permissions unexpectedly.
 - Click the status bar icon or use the global hotkey (Control+A by default) to start/stop recording.
+- Optionally enable Settings → General → Mic Key to use the mic key (F5) instead.
 - When you stop, the app transcribes the audio:
   - Local mode: runs `python -m whisper` with your chosen model.
   - API mode: calls OpenAI’s transcription API and requests plain text.
@@ -75,6 +77,14 @@ Notes:
 - General
   - Launch at login.
   - Hotkey: pick your global shortcut combination.
+  - Mic Key: press the mic key (F5) to toggle recording instead of opening macOS Dictation.
+    - The mic key is not F5 at the hardware level — it is HID consumer usage 0xCF, which
+      never reaches the event stream, so no hotkey API can intercept it. Whisper instead uses
+      the built-in `hidutil` tool to remap it to F13 system-wide, which is what stops the
+      Dictation panel from opening.
+    - The remap is applied while Whisper runs and removed when you turn it off or quit, so
+      the key reverts to normal Dictation and nothing is left behind if you delete the app.
+    - Mappings belonging to other tools are preserved.
 - Setup
   - The Setup checklist shows microphone, Accessibility, notification, and engine readiness.
   - Permissions are requested only when you choose the corresponding setup action.
@@ -108,7 +118,8 @@ Notes:
 - `PasteboardManager.swift` — Rich clipboard preservation, permission-aware paste, and optional Enter keypress.
 - `PreferencesView.swift` — SwiftUI setup checklist and preferences UI, with Liquid Glass helpers (`liquidGlass`/`glassButton`) that adopt `glassEffect` and glass button styles on macOS 26 and fall back to materials on macOS 15.
 - `GlobalShortcutMonitor.swift` — Modern system-wide key combination monitor.
-- `HotKeyManager.swift` — Legacy F-key hotkey helper (not used by default).
+- `HotKeyManager.swift` — Carbon hotkey registration for a bare key; used for the mic key (F13 after remap). Consumes the key and needs no permissions.
+- `DictationKeyRemapper.swift` — Applies/removes the `hidutil` mic key → F13 remap, merging with any mappings other tools own.
 - `HUDWindowController.swift` — Optional popup showing last transcript (debug); uses `NSGlassEffectView` (Liquid Glass) on macOS 26, `NSVisualEffectView` otherwise.
 - `LoadingAnimator.swift` — Status bar spinner while transcribing.
 - `WhisperTests/CoreBehaviorTests.swift` — State, multipart-form, and clipboard regression tests.

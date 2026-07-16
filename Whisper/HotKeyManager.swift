@@ -2,23 +2,36 @@ import AppKit
 import ApplicationServices
 import Carbon.HIToolbox
 
+/// Registers a bare (modifier-free) system-wide hotkey via Carbon.
+///
+/// Chosen over `GlobalShortcutMonitor` for the mic key because it *consumes* the key —
+/// it never reaches the focused app — and needs no Accessibility or Input Monitoring
+/// permission, whereas `NSEvent.addGlobalMonitorForEvents` requires Accessibility.
 final class HotKeyManager {
+    enum RegistrationError: LocalizedError {
+        case registrationFailed(OSStatus)
+
+        var errorDescription: String? {
+            "Another app is already using this key."
+        }
+    }
+
     private var eventHandler: EventHandlerRef?
     private var hotKeyRef: EventHotKeyRef?
     private let handler: () -> Void
     private let keyCode: UInt32
 
-    init(keyCode: UInt32, handler: @escaping () -> Void) {
+    init(keyCode: UInt32, handler: @escaping () -> Void) throws {
         self.keyCode = keyCode
         self.handler = handler
-        registerHotKey()
+        try registerHotKey()
     }
 
     deinit {
         unregisterHotKey()
     }
 
-    func registerHotKey() {
+    private func registerHotKey() throws {
         var eventSpec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
         let selfPtr = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
         InstallEventHandler(GetEventDispatcherTarget(), { (next, event, userData) -> OSStatus in
@@ -29,7 +42,11 @@ final class HotKeyManager {
         }, 1, &eventSpec, selfPtr, &eventHandler)
 
         let hotKeyID = EventHotKeyID(signature: OSType(UInt32(truncatingIfNeeded: FourCharCode("WSPR"))), id: 1)
-        RegisterEventHotKey(UInt32(keyCode), 0, hotKeyID, GetEventDispatcherTarget(), 0, &hotKeyRef)
+        let status = RegisterEventHotKey(keyCode, 0, hotKeyID, GetEventDispatcherTarget(), 0, &hotKeyRef)
+        guard status == noErr else {
+            unregisterHotKey()
+            throw RegistrationError.registrationFailed(status)
+        }
     }
 
     func unregisterHotKey() {
@@ -41,23 +58,6 @@ final class HotKeyManager {
             RemoveEventHandler(eventHandler)
             self.eventHandler = nil
         }
-    }
-
-    func setKeyCode(_ newKeyCode: UInt32) {
-        unregisterHotKey()
-        var eventSpec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
-        let selfPtr = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
-        InstallEventHandler(GetEventDispatcherTarget(), { (next, event, userData) -> OSStatus in
-            guard let userData = userData else { return noErr }
-            let mySelf = Unmanaged<HotKeyManager>.fromOpaque(userData).takeUnretainedValue()
-            mySelf.handler()
-            return noErr
-        }, 1, &eventSpec, selfPtr, &eventHandler)
-
-        let hotKeyID = EventHotKeyID(signature: OSType(UInt32(truncatingIfNeeded: FourCharCode("WSPR"))), id: 1)
-        var ref: EventHotKeyRef?
-        RegisterEventHotKey(UInt32(newKeyCode), 0, hotKeyID, GetEventDispatcherTarget(), 0, &ref)
-        self.hotKeyRef = ref
     }
 
     static func requestAccessibilityIfNeeded() {

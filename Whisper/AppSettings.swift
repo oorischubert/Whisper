@@ -31,8 +31,9 @@ final class AppSettings: ObservableObject {
         didSet { defaults.set(preserveClipboard, forKey: Keys.preserveClipboard) }
     }
 
-    @Published var hotkeyKeyCode: UInt32 {
-        didSet { defaults.set(Int(hotkeyKeyCode), forKey: Keys.hotkeyKeyCode) }
+    // Remap the mic key (F5) to toggle Whisper instead of opening macOS Dictation
+    @Published var dictationKeyEnabled: Bool {
+        didSet { defaults.set(dictationKeyEnabled, forKey: Keys.dictationKeyEnabled) }
     }
 
     @Published var useAPI: Bool {
@@ -94,8 +95,7 @@ final class AppSettings: ObservableObject {
 
         self.pressEnterAfterPaste = defaults.object(forKey: Keys.pressEnterAfterPaste) as? Bool ?? false
         self.preserveClipboard = defaults.object(forKey: Keys.preserveClipboard) as? Bool ?? true
-        let hk = UInt32(defaults.integer(forKey: Keys.hotkeyKeyCode))
-        self.hotkeyKeyCode = (hk == 0) ? 96 : hk // F5 default
+        self.dictationKeyEnabled = defaults.object(forKey: Keys.dictationKeyEnabled) as? Bool ?? false
         self.useAPI = defaults.object(forKey: Keys.useAPI) as? Bool ?? false
         let legacyAPIKey = defaults.string(forKey: Keys.apiKey)
         self.apiKey = KeychainStore.apiKey ?? legacyAPIKey
@@ -202,7 +202,7 @@ final class AppSettings: ObservableObject {
         static let whisperBookmarkData = "whisperBookmarkData"
         static let pressEnterAfterPaste = "pressEnterAfterPaste"
         static let preserveClipboard = "preserveClipboard"
-        static let hotkeyKeyCode = "hotkeyKeyCode"
+        static let dictationKeyEnabled = "dictationKeyEnabled"
         static let useAPI = "useAPI"
         static let apiKey = "apiKey"
         static let apiModel = "apiModel"

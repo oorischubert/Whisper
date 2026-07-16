@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import Combine
+import Carbon.HIToolbox
 @preconcurrency import UserNotifications
 
 @MainActor
@@ -10,6 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private let transcriber = Transcriber()
     private var activity: AppActivity = .idle
     private var comboMonitor: GlobalShortcutMonitor?
+    private var dictationHotKey: HotKeyManager?
     private var cancellables = Set<AnyCancellable>()
     private var preferencesWindowController: NSWindowController?
     private var loadingAnimator: LoadingAnimator?
@@ -19,6 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupStatusItem()
         setupGlobalShortcut()
+        setupDictationKey()
         UNUserNotificationCenter.current().delegate = self
 
         if !AppSettings.shared.hasCompletedOnboarding {
@@ -30,6 +33,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         transcriptionTask?.cancel()
         if activity.isRecording, let url = recorder.stop() {
             try? FileManager.default.removeItem(at: url)
+        }
+        // Synchronous by necessity: a Task would not finish before we exit, and leaving
+        // the remap behind would make the mic key silently dead until the next launch.
+        if AppSettings.shared.dictationKeyEnabled {
+            DictationKeyRemapper.removeSync()
         }
     }
 
@@ -52,6 +60,69 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 self?.refreshMenu()
             }
             .store(in: &cancellables)
+    }
+
+    private func setupDictationKey() {
+        Task { @MainActor in await syncDictationKey(enabled: AppSettings.shared.dictationKeyEnabled) }
+
+        // Use the value the publisher delivers: @Published fires in willSet, so reading
+        // the property back inside this sink would see the *old* value.
+        AppSettings.shared.$dictationKeyEnabled
+            .dropFirst()
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] enabled in
+                Task { @MainActor in await self?.syncDictationKey(enabled: enabled) }
+            }
+            .store(in: &cancellables)
+
+        // A keyboard re-enumerating on wake can drop the mapping.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            Task { @MainActor in
+                guard AppSettings.shared.dictationKeyEnabled else { return }
+                await DictationKeyRemapper.shared.apply()
+            }
+        }
+    }
+
+    private func syncDictationKey(enabled: Bool) async {
+        guard enabled else {
+            dictationHotKey = nil // deinit unregisters
+            await DictationKeyRemapper.shared.remove()
+            return
+        }
+
+        await DictationKeyRemapper.shared.apply()
+        guard DictationKeyRemapper.shared.status == .active else {
+            dictationHotKey = nil
+            return
+        }
+
+        do {
+            dictationHotKey = try HotKeyManager(keyCode: UInt32(kVK_F13)) { [weak self] in
+                Task { @MainActor in self?.handleDictationKey() }
+            }
+        } catch {
+            // Without the key bound, the remap would only suppress Dictation and give
+            // nothing back — a dead mic key. Undo it rather than leave it that way.
+            dictationHotKey = nil
+            await DictationKeyRemapper.shared.remove()
+            DictationKeyRemapper.shared.noteFailure(error.localizedDescription)
+        }
+    }
+
+    private func handleDictationKey() {
+        // While the Settings "Test" button is armed, report the press instead of acting
+        // on it — otherwise testing the key would start a recording.
+        if DictationKeyRemapper.shared.isTesting {
+            DictationKeyRemapper.shared.noteTestPress()
+            return
+        }
+        toggleRecording()
     }
 
     private func setupStatusItem() {
