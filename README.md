@@ -64,7 +64,7 @@ Notes:
 - Engine
   - Use OpenAI API: enable to use the API instead of local Python.
   - API Key: your `sk-…` key, stored in macOS Keychain.
-  - API Model: defaults to `whisper-1`.
+  - API Model: defaults to `gpt-4o-mini-transcribe`.
   - Local Model: choose `tiny|base|small|medium|large`.
   - Python Executable: path to the Python that has `openai-whisper` installed; “Detect” and “Test” help verify.
 - Language

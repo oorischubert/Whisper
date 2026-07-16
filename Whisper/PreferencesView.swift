@@ -367,7 +367,7 @@ struct PreferencesView: View {
                         }
                         HStack {
                             Text("API Model").frame(width: labelWidth, alignment: .trailing)
-                            TextField("whisper-1", text: $settings.apiModel)
+                            TextField("gpt-4o-mini-transcribe", text: $settings.apiModel)
                                 .textFieldStyle(.roundedBorder)
                         }
                     }

@@ -99,7 +99,7 @@ final class AppSettings: ObservableObject {
         self.useAPI = defaults.object(forKey: Keys.useAPI) as? Bool ?? false
         let legacyAPIKey = defaults.string(forKey: Keys.apiKey)
         self.apiKey = KeychainStore.apiKey ?? legacyAPIKey
-        self.apiModel = defaults.string(forKey: Keys.apiModel) ?? "whisper-1"
+        self.apiModel = defaults.string(forKey: Keys.apiModel) ?? "gpt-4o-mini-transcribe"
         self.language = defaults.string(forKey: Keys.language) ?? "auto"
         self.launchAtLogin = defaults.object(forKey: Keys.launchAtLogin) as? Bool ?? false
         self.hasCompletedOnboarding = defaults.bool(forKey: Keys.hasCompletedOnboarding)
