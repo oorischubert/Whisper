@@ -62,6 +62,11 @@ final class AppSettings: ObservableObject {
         }
     }
 
+    // Chime when a recording starts and stops, the way macOS Dictation does
+    @Published var soundFeedbackEnabled: Bool {
+        didSet { defaults.set(soundFeedbackEnabled, forKey: Keys.soundFeedbackEnabled) }
+    }
+
     @Published var hasCompletedOnboarding: Bool {
         didSet { defaults.set(hasCompletedOnboarding, forKey: Keys.hasCompletedOnboarding) }
     }
@@ -102,6 +107,7 @@ final class AppSettings: ObservableObject {
         self.apiModel = defaults.string(forKey: Keys.apiModel) ?? "gpt-4o-mini-transcribe"
         self.language = defaults.string(forKey: Keys.language) ?? "auto"
         self.launchAtLogin = defaults.object(forKey: Keys.launchAtLogin) as? Bool ?? false
+        self.soundFeedbackEnabled = defaults.object(forKey: Keys.soundFeedbackEnabled) as? Bool ?? true
         self.hasCompletedOnboarding = defaults.bool(forKey: Keys.hasCompletedOnboarding)
         self.debugPasteToXcode = defaults.object(forKey: Keys.debugPasteToXcode) as? Bool ?? false
         let ck = defaults.integer(forKey: Keys.comboKeyCode)
@@ -208,6 +214,7 @@ final class AppSettings: ObservableObject {
         static let apiModel = "apiModel"
         static let language = "language"
         static let launchAtLogin = "launchAtLogin"
+        static let soundFeedbackEnabled = "soundFeedbackEnabled"
         static let debugPasteToXcode = "debugPasteToXcode"
         static let comboKeyCode = "comboKeyCode"
         static let comboModifiers = "comboModifiers"

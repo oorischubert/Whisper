@@ -493,6 +493,10 @@ struct PreferencesView: View {
                         .font(.footnote)
                         .foregroundColor(.secondary)
                 }
+                Toggle("Play a sound when recording starts and stops", isOn: $settings.soundFeedbackEnabled)
+                Text("The same chimes macOS Dictation uses.")
+                    .font(.footnote)
+                    .foregroundColor(.secondary)
             }
 
             SectionCard(title: "Hotkey", subtitle: "Choose the system-wide shortcut to trigger transcription.") {

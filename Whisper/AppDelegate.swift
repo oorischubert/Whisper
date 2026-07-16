@@ -148,6 +148,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         primary.target = self
         menu.addItem(primary)
 
+        if activity.isRecording {
+            let cancel = NSMenuItem(title: "Cancel Recording", action: #selector(cancelRecording), keyEquivalent: "")
+            cancel.target = self
+            cancel.image = makeMenuImage(systemName: "xmark")
+            menu.addItem(cancel)
+        }
+
         let shortcut = NSMenuItem(
             title: "Shortcut: \(hotkeyDescription())",
             action: nil,
@@ -225,6 +232,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         do {
             try recorder.start()
             setActivity(.recording(startedAt: Date()))
+            SoundPlayer.playStart()
         } catch {
             showAlert("Microphone unavailable", message: error.localizedDescription)
         }
@@ -232,7 +240,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     private func stopAndTranscribe() {
         guard activity.isRecording else { return }
+        // Chime only after the recorder is closed, so it cannot land in the audio.
         let audioURL = recorder.stop()
+        SoundPlayer.playStop()
         setActivity(.transcribing)
 
         guard let audioURL else {
@@ -253,13 +263,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             do {
                 let attributes = try FileManager.default.attributesOfItem(atPath: audioURL.path)
                 let byteCount = (attributes[.size] as? NSNumber)?.intValue ?? 0
-                guard byteCount >= 3_600 else {
-                    self.showAlert(
-                        "Audio too short",
-                        message: "Speak for a moment before stopping the recording."
-                    )
-                    return
-                }
+                // Started and stopped without speaking: nothing to transcribe, and
+                // nothing worth interrupting the user over. Drop it silently.
+                guard byteCount >= 3_600 else { return }
 
                 let text = try await self.transcriber.transcribe(
                     audioURL: audioURL,
@@ -297,6 +303,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 showAlert("Transcription failed", message: error.localizedDescription)
             }
         }
+    }
+
+    @objc private func cancelRecording() {
+        guard activity.isRecording else { return }
+        if let url = recorder.stop() {
+            try? FileManager.default.removeItem(at: url)
+        }
+        SoundPlayer.playStop()
+        setActivity(.idle)
     }
 
     @objc private func cancelTranscription() {
