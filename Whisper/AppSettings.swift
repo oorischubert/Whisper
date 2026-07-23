@@ -2,6 +2,37 @@ import Foundation
 import ServiceManagement
 import AppKit
 
+/// Which quick-action buttons ride alongside the menu-bar icon.
+enum StatusControlsMode: Int, CaseIterable, Identifiable {
+    /// Just the icon, like the original app — the menu handles everything.
+    case iconOnly = 0
+    /// A cancel (✕) button appears while recording or transcribing.
+    case cancelOnly = 1
+    /// A start/stop button is always shown; cancel (✕) joins it while active.
+    case full = 2
+
+    var id: Int { rawValue }
+
+    var title: String {
+        switch self {
+        case .iconOnly: return "Icon Only"
+        case .cancelOnly: return "Cancel Button"
+        case .full: return "Full Controls"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .iconOnly:
+            return "Just the menu-bar icon. Click it to open the menu with every action."
+        case .cancelOnly:
+            return "While recording or transcribing, a cancel (✕) button appears next to the icon."
+        case .full:
+            return "A start/stop button is always shown. While recording, a cancel (✕) button joins it."
+        }
+    }
+}
+
 final class AppSettings: ObservableObject {
     static let shared = AppSettings()
 
@@ -90,6 +121,11 @@ final class AppSettings: ObservableObject {
         didSet { defaults.set(comboModifiers.rawValue, forKey: Keys.comboModifiers) }
     }
 
+    // Which quick-action buttons appear next to the menu-bar icon
+    @Published var statusControlsMode: StatusControlsMode {
+        didSet { defaults.set(statusControlsMode.rawValue, forKey: Keys.statusControlsMode) }
+    }
+
     private init() {
         let model = defaults.string(forKey: Keys.localModel) ?? "base"
         self.localModel = model
@@ -115,6 +151,9 @@ final class AppSettings: ObservableObject {
         let cmRaw = defaults.object(forKey: Keys.comboModifiers) as? UInt ?? NSEvent.ModifierFlags.control.rawValue
         self.comboModifiers = NSEvent.ModifierFlags(rawValue: cmRaw)
         self.debugShowPopup = defaults.object(forKey: Keys.debugShowPopup) as? Bool ?? false
+        // Remembered across launches; a fresh install starts on Full Controls.
+        let controlsRaw = defaults.object(forKey: Keys.statusControlsMode) as? Int ?? StatusControlsMode.full.rawValue
+        self.statusControlsMode = StatusControlsMode(rawValue: controlsRaw) ?? .full
         if KeychainStore.apiKey == nil, let legacyAPIKey, !legacyAPIKey.isEmpty {
             KeychainStore.apiKey = legacyAPIKey
         }
@@ -220,6 +259,7 @@ final class AppSettings: ObservableObject {
         static let comboModifiers = "comboModifiers"
         static let debugShowPopup = "debugShowPopup"
         static let hasCompletedOnboarding = "hasCompletedOnboarding"
+        static let statusControlsMode = "statusControlsMode"
     }
 
     private func applyLaunchAtLogin() {

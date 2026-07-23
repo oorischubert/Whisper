@@ -23,7 +23,7 @@ enum TranscriptionFailure {
 }
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
     private let recorder = Recorder()
     private let transcriber = Transcriber()
@@ -32,8 +32,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var dictationHotKey: HotKeyManager?
     private var cancellables = Set<AnyCancellable>()
     private var preferencesWindowController: NSWindowController?
-    private var loadingAnimator: LoadingAnimator?
     private var transcriptionTask: Task<Void, Never>?
+    private var pill: StatusItemPill!
+    private var pendingPillUpdate: DispatchWorkItem?
     private lazy var hud = HUDWindowController()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -75,7 +76,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                     keyCode: AppSettings.shared.comboKeyCode,
                     modifiers: AppSettings.shared.comboModifiers
                 )
-                self?.refreshMenu()
             }
             .store(in: &cancellables)
     }
@@ -145,7 +145,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     private func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        pill = StatusItemPill(statusItem: statusItem)
+        pill.onIconClick = { [weak self] in self?.popUpStatusMenu() }
+        pill.onPrimary = { [weak self] in self?.toggleRecording() }
+        pill.onCancel = { [weak self] in
+            guard let self else { return }
+            if self.activity.isTranscribing {
+                self.cancelTranscription()
+            } else {
+                self.cancelRecording()
+            }
+        }
+        pill.update(activity: .idle, controls: AppSettings.shared.statusControlsMode, animated: false)
+
+        // Re-lay-out the pill live when the user changes which buttons show.
+        AppSettings.shared.$statusControlsMode
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.updateStatusItem() }
+            .store(in: &cancellables)
+
         updateStatusItem()
+    }
+
+    /// Opens the status menu properly attached under the item. Assigning the menu
+    /// and clicking the button lets AppKit position it (a manual popUp lands in the
+    /// wrong place); `menuDidClose` clears it so inline button clicks keep working.
+    private func popUpStatusMenu() {
+        let menu = buildMenu()
+        menu.delegate = self
+        statusItem.menu = menu
+        statusItem.button?.performClick(nil)
     }
 
     private func buildMenu() -> NSMenu {
@@ -173,13 +202,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             menu.addItem(cancel)
         }
 
-        let shortcut = NSMenuItem(
-            title: "Shortcut: \(hotkeyDescription())",
-            action: nil,
-            keyEquivalent: ""
-        )
-        shortcut.isEnabled = false
-        menu.addItem(shortcut)
         menu.addItem(.separator())
 
         let settings = NSMenuItem(title: "Settings…", action: #selector(openPreferences), keyEquivalent: ",")
@@ -196,39 +218,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     private func updateStatusItem() {
-        let symbol: String
         let accessibilityDescription: String
+        let pillActivity: StatusItemPill.Activity
         switch activity {
         case .idle:
-            symbol = "waveform"
             accessibilityDescription = "Whisper — ready"
+            pillActivity = .idle
         case .recording:
-            symbol = "waveform.badge.mic"
             accessibilityDescription = "Whisper — recording"
+            pillActivity = .recording
         case .transcribing:
-            symbol = "waveform"
             accessibilityDescription = "Whisper — transcribing"
+            pillActivity = .transcribing
         }
-        statusItem.button?.image = NSImage(
-            systemSymbolName: symbol,
-            accessibilityDescription: accessibilityDescription
-        )
         statusItem.button?.toolTip = accessibilityDescription
-        statusItem.menu = buildMenu()
+        pill.update(activity: pillActivity, controls: AppSettings.shared.statusControlsMode, animated: true)
     }
 
-    private func setActivity(_ newActivity: AppActivity) {
+    /// Updates the activity and refreshes the menu-bar pill.
+    ///
+    /// `pillDelay` holds the pill's *visual* change back by that interval while the
+    /// activity state flips immediately. Used when starting a recording: the mic is
+    /// already live, but delaying the ✕/width change keeps it from piling onto the
+    /// leftward shift macOS makes when the microphone's orange indicator appears.
+    private func setActivity(_ newActivity: AppActivity, pillDelay: TimeInterval = 0) {
         activity = newActivity
-        if newActivity.isTranscribing {
-            startLoadingAnimation()
-        } else {
-            stopLoadingAnimation()
-        }
-        updateStatusItem()
-    }
+        pendingPillUpdate?.cancel()
+        pendingPillUpdate = nil
 
-    private func refreshMenu() {
-        statusItem.menu = buildMenu()
+        guard pillDelay > 0 else {
+            updateStatusItem()
+            return
+        }
+        let work = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated { self?.updateStatusItem() }
+        }
+        pendingPillUpdate = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + pillDelay, execute: work)
     }
 
     @objc private func handleStartStop() {
@@ -249,8 +275,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private func startRecording() {
         do {
             try recorder.start()
-            setActivity(.recording(startedAt: Date()))
             SoundPlayer.playStart()
+            // Mic and audio are live now; hold the pill's visual change back a beat so it
+            // doesn't compound with the menu-bar shift from the OS mic indicator.
+            setActivity(.recording(startedAt: Date()), pillDelay: 0.1)
         } catch {
             showAlert("Microphone unavailable", message: error.localizedDescription)
         }
@@ -339,7 +367,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     @objc private func openPreferences() {
-        showPreferences(initialTab: .transcription)
+        showPreferences(initialTab: .setup)
     }
 
     private func showPreferences(initialTab: PreferencesView.PrefsTab) {
@@ -347,6 +375,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             windowController.showWindow(nil)
             windowController.window?.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
+            clearInitialFocus(for: windowController.window)
             return
         }
         let controller = NSHostingController(rootView: PreferencesView(initialTab: initialTab))
@@ -358,6 +387,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         preferencesWindowController = windowController
         windowController.showWindow(nil)
         NSApp.activate(ignoringOtherApps: true)
+        clearInitialFocus(for: window)
+    }
+
+    /// Prevents the first text field (e.g. the API key) from auto-grabbing focus
+    /// and selecting its contents when the settings window appears. The field
+    /// becomes editable only once the user clicks into it.
+    private func clearInitialFocus(for window: NSWindow?) {
+        DispatchQueue.main.async {
+            window?.makeFirstResponder(nil)
+        }
     }
 
     @objc private func quitApp() {
@@ -372,17 +411,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let configured = image.withSymbolConfiguration(configuration) ?? image
         configured.isTemplate = true
         return configured
-    }
-
-    private func hotkeyDescription() -> String {
-        let modifiers = AppSettings.shared.comboModifiers
-        var value = ""
-        if modifiers.contains(.control) { value += "⌃" }
-        if modifiers.contains(.option) { value += "⌥" }
-        if modifiers.contains(.shift) { value += "⇧" }
-        if modifiers.contains(.command) { value += "⌘" }
-        value += PreferencesView.keyDisplayName(for: AppSettings.shared.comboKeyCode)
-        return value
     }
 
     private func notify(_ title: String, subtitle: String?) {
@@ -412,19 +440,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         #endif
     }
 
-    private func startLoadingAnimation() {
-        guard let button = statusItem.button else { return }
-        loadingAnimator?.stop()
-        let animator = LoadingAnimator { [weak button] glyph in button?.title = glyph }
-        loadingAnimator = animator
-        animator.start()
-    }
-
-    private func stopLoadingAnimation() {
-        loadingAnimator?.stop()
-        statusItem?.button?.title = ""
-    }
-
     private func showTranscriptHUD(_ text: String) {
         guard AppSettings.shared.debugShowPopup else { return }
         hud.show(text: text)
@@ -436,5 +451,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
         completionHandler([.banner, .sound, .list])
+    }
+
+    // The status menu is assigned only for the duration of a click (see
+    // popUpStatusMenu); clearing it on close restores the inline buttons' clicks.
+    func menuDidClose(_ menu: NSMenu) {
+        statusItem.menu = nil
     }
 }

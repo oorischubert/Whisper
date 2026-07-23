@@ -52,8 +52,16 @@ struct PreferencesView: View {
     @StateObject private var settings = AppSettings.shared
     @StateObject private var remapper = DictationKeyRemapper.shared
     @State private var micKeyTestResult: MicKeyTestResult?
+    @State private var didCopyTranscript = false
+    @State private var transcriptContentHeight: CGFloat = 0
+    @State private var copyFlashToken = 0
 
     private let models = ["tiny", "base", "small", "medium", "large"]
+    private let apiModels: [(id: String, cost: String)] = [
+        ("gpt-4o-transcribe", "$0.006/min"),
+        ("gpt-4o-mini-transcribe", "$0.003/min"),
+        ("whisper-1", "$0.006/min")
+    ]
     private let languages: [(label: String, code: String)] = [
         ("Auto (detect)", "auto"),
         ("English", "en"),
@@ -74,11 +82,12 @@ struct PreferencesView: View {
     @State private var tab: PrefsTab
     private let labelWidth: CGFloat = 160
 
-    init(initialTab: PrefsTab = .transcription) {
+    init(initialTab: PrefsTab = .setup) {
         _tab = State(initialValue: initialTab)
     }
 
-    enum PrefsTab: String, CaseIterable, Identifiable { case setup, transcription, pasting, general
+    // Sidebar order follows declaration order: Setup, General, then the rest.
+    enum PrefsTab: String, CaseIterable, Identifiable { case setup, general, transcription, pasting
         var id: String { rawValue }
         var title: String {
             switch self {
@@ -367,8 +376,23 @@ struct PreferencesView: View {
                         }
                         HStack {
                             Text("API Model").frame(width: labelWidth, alignment: .trailing)
-                            TextField("gpt-4o-mini-transcribe", text: $settings.apiModel)
-                                .textFieldStyle(.roundedBorder)
+                            Menu {
+                                ForEach(apiModels, id: \.id) { model in
+                                    Button {
+                                        settings.apiModel = model.id
+                                    } label: {
+                                        if settings.apiModel == model.id {
+                                            Label("\(model.id)  —  \(model.cost)", systemImage: "checkmark")
+                                        } else {
+                                            Text("\(model.id)  —  \(model.cost)")
+                                        }
+                                    }
+                                }
+                            } label: {
+                                Text(settings.apiModel)
+                            }
+                            .frame(maxWidth: 260)
+                            Spacer(minLength: 0)
                         }
                     }
                 } else {
@@ -433,29 +457,50 @@ struct PreferencesView: View {
             }
 
             SectionCard(title: "Last Transcript", subtitle: "Copied to your clipboard with one click.") {
-                VStack(alignment: .leading, spacing: 8) {
-                    ScrollView {
-                        Text(settings.lastTranscript.isEmpty ? "(none yet)" : settings.lastTranscript)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .textSelection(.enabled)
-                            .foregroundStyle(settings.lastTranscript.isEmpty ? .secondary : .primary)
-                            .font(.system(.body, design: .monospaced))
-                            .padding(12)
-                    }
-                    .frame(height: 140)
-                    .liquidGlass(cornerRadius: 10)
-
-                    HStack {
-                        Spacer()
-                        Button("Copy to Clipboard") {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(settings.lastTranscript, forType: .string)
-                        }
-                        .glassButton()
-                        .disabled(settings.lastTranscript.isEmpty)
-                    }
+                Button(action: copyLastTranscript) {
+                    Image(systemName: didCopyTranscript ? "checkmark" : "doc.on.doc")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(didCopyTranscript ? Color.green : Color.secondary)
+                        .contentTransition(.symbolEffect(.replace))
+                        .frame(width: 26, height: 26)
+                        .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
+                .disabled(settings.lastTranscript.isEmpty)
+                .help("Copy to clipboard")
+            } content: {
+                ScrollView {
+                    Text(settings.lastTranscript.isEmpty ? "(none yet)" : settings.lastTranscript)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                        .foregroundStyle(settings.lastTranscript.isEmpty ? .secondary : .primary)
+                        .font(.system(.body, design: .monospaced))
+                        .padding(12)
+                        .background(
+                            GeometryReader { proxy in
+                                Color.clear.preference(key: TranscriptHeightKey.self, value: proxy.size.height)
+                            }
+                        )
+                }
+                // Hug the content for short transcripts, cap and scroll for long ones.
+                .frame(height: min(max(transcriptContentHeight, 46), 140))
+                .liquidGlass(cornerRadius: 10)
+                .onPreferenceChange(TranscriptHeightKey.self) { transcriptContentHeight = $0 }
+                .animation(.easeInOut(duration: 0.22), value: transcriptContentHeight)
             }
+        }
+    }
+
+    private func copyLastTranscript() {
+        guard !settings.lastTranscript.isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(settings.lastTranscript, forType: .string)
+        copyFlashToken &+= 1
+        let token = copyFlashToken
+        withAnimation(.easeOut(duration: 0.2)) { didCopyTranscript = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.1) {
+            guard token == copyFlashToken else { return }
+            withAnimation(.easeInOut(duration: 0.35)) { didCopyTranscript = false }
         }
     }
 
@@ -497,6 +542,13 @@ struct PreferencesView: View {
                 Text("The same chimes macOS Dictation uses.")
                     .font(.footnote)
                     .foregroundColor(.secondary)
+            }
+
+            SectionCard(
+                title: "Menu-Bar Controls",
+                subtitle: "Choose which quick-action buttons sit next to the menu-bar icon."
+            ) {
+                MenuBarControlsSelector(selection: $settings.statusControlsMode)
             }
 
             SectionCard(title: "Hotkey", subtitle: "Choose the system-wide shortcut to trigger transcription.") {
@@ -854,6 +906,14 @@ except Exception as e:
         }
     }
 
+    /// Reports the measured height of the transcript content so the box can size to it.
+    private struct TranscriptHeightKey: PreferenceKey {
+        static let defaultValue: CGFloat = 0
+        static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+            value = max(value, nextValue())
+        }
+    }
+
     private struct PermissionRow: View {
         let symbol: String
         let title: String
@@ -895,25 +955,34 @@ except Exception as e:
 
     // MARK: - Section Card
 
-    private struct SectionCard<Content: View>: View {
+    private struct SectionCard<Content: View, Accessory: View>: View {
         let title: String
         let subtitle: String?
+        @ViewBuilder var accessory: Accessory
         @ViewBuilder var content: Content
 
-        init(title: String, subtitle: String? = nil, @ViewBuilder content: () -> Content) {
+        init(title: String,
+             subtitle: String? = nil,
+             @ViewBuilder accessory: () -> Accessory = { EmptyView() },
+             @ViewBuilder content: () -> Content) {
             self.title = title
             self.subtitle = subtitle
+            self.accessory = accessory()
             self.content = content()
         }
 
         var body: some View {
             VStack(alignment: .leading, spacing: 14) {
                 if !title.isEmpty {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(title).font(.headline)
-                        if let subtitle {
-                            Text(subtitle).font(.subheadline).foregroundStyle(.secondary)
+                    HStack(alignment: .top, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(title).font(.headline)
+                            if let subtitle {
+                                Text(subtitle).font(.subheadline).foregroundStyle(.secondary)
+                            }
                         }
+                        Spacer(minLength: 0)
+                        accessory
                     }
                 }
                 content
@@ -922,6 +991,133 @@ except Exception as e:
             .frame(maxWidth: .infinity, alignment: .leading)
             .liquidGlass(cornerRadius: 16)
             .shadow(color: .black.opacity(0.06), radius: 10, y: 3)
+        }
+    }
+
+    // MARK: - Menu-Bar Controls Selector
+
+    /// A live preview of the menu-bar item above a full-width slider whose thumb snaps
+    /// between the three control modes.
+    private struct MenuBarControlsSelector: View {
+        @Binding var selection: StatusControlsMode
+        private let modes = StatusControlsMode.allCases
+        @State private var dragX: CGFloat?
+
+        private let thumb: CGFloat = 24
+        private let trackHeight: CGFloat = 9
+
+        var body: some View {
+            VStack(alignment: .leading, spacing: 18) {
+                preview
+                slider
+                Text(selection.detail)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+
+        /// A mock of the menu-bar item as it looks while recording, for the selected mode.
+        private var preview: some View {
+            HStack(spacing: 8) {
+                if selection != .iconOnly {
+                    Image(systemName: "xmark").fontWeight(.bold)
+                        .transition(.scale.combined(with: .opacity))
+                }
+                Image(systemName: "waveform.badge.mic")
+                if selection == .full {
+                    Image(systemName: "stop.fill")
+                        .transition(.scale.combined(with: .opacity))
+                }
+            }
+            .font(.system(size: 15, weight: .medium))
+            .foregroundStyle(.primary)
+            .frame(height: 22)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 9)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(.regularMaterial)
+                    .overlay(Capsule(style: .continuous).strokeBorder(Color.primary.opacity(0.10)))
+            )
+            .frame(maxWidth: .infinity)
+            .animation(.snappy(duration: 0.3), value: selection)
+        }
+
+        private var slider: some View {
+            VStack(spacing: 10) {
+                GeometryReader { geo in
+                    let inset = thumb / 2
+                    let capR = trackHeight / 2
+                    let trackPad = inset - capR          // caps land centred on the end dots
+                    let travel = max(1, geo.size.width - thumb)
+                    let stops = modes.indices.map { travel * CGFloat($0) / CGFloat(modes.count - 1) }
+                    let selIndex = modes.firstIndex(of: selection) ?? 0
+                    let thumbX = dragX ?? stops[selIndex]
+
+                    ZStack(alignment: .leading) {
+                        // Track — its rounded caps are centred on the outer dots.
+                        Capsule().fill(Color.primary.opacity(0.12))
+                            .frame(height: trackHeight)
+                            .padding(.horizontal, trackPad)
+                        // Fill — its rounded ends are centred on the first dot and on the
+                        // thumb, so the current dot sits *inside* the blue's rounded cap.
+                        Capsule().fill(Color.accentColor.opacity(0.6))
+                            .frame(width: thumbX + trackHeight, height: trackHeight)
+                            .offset(x: trackPad)
+                        // A marker at each of the other snap positions.
+                        ForEach(modes.indices, id: \.self) { i in
+                            Circle().fill(Color.primary.opacity(0.28))
+                                .frame(width: 5, height: 5)
+                                .offset(x: inset + stops[i] - 2.5)
+                        }
+                        // The knob.
+                        Circle()
+                            .fill(Color(nsColor: .controlColor))
+                            .overlay(Circle().strokeBorder(Color.primary.opacity(0.18)))
+                            .shadow(color: .black.opacity(0.22), radius: 1.5, y: 1)
+                            .frame(width: thumb, height: thumb)
+                            .offset(x: thumbX)
+                            .animation(dragX == nil ? .snappy(duration: 0.3) : nil, value: thumbX)
+                        Color.clear
+                            .contentShape(Rectangle())
+                            .gesture(
+                                DragGesture(minimumDistance: 0)
+                                    .onChanged { value in
+                                        let x = min(max(0, value.location.x - thumb / 2), travel)
+                                        dragX = x
+                                        let nearest = stops.enumerated().min {
+                                            abs($0.element - x) < abs($1.element - x)
+                                        }?.offset ?? selIndex
+                                        if modes[nearest] != selection { selection = modes[nearest] }
+                                    }
+                                    .onEnded { _ in dragX = nil }
+                            )
+                    }
+                    .frame(height: thumb)
+                }
+                .frame(height: thumb)
+
+                HStack(spacing: 0) {
+                    ForEach(Array(modes.enumerated()), id: \.element.id) { index, mode in
+                        Text(mode.title)
+                            .font(.caption)
+                            .fontWeight(mode == selection ? .semibold : .regular)
+                            .foregroundStyle(mode == selection ? Color.primary : Color.secondary)
+                            .frame(maxWidth: .infinity, alignment: labelAlignment(index))
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                withAnimation(.snappy(duration: 0.3)) { selection = mode }
+                            }
+                    }
+                }
+            }
+        }
+
+        private func labelAlignment(_ index: Int) -> Alignment {
+            if index == 0 { return .leading }
+            if index == modes.count - 1 { return .trailing }
+            return .center
         }
     }
 }
