@@ -347,6 +347,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             } catch is CancellationError {
                 notify("Transcription cancelled", subtitle: nil)
             } catch {
+                // A cancelled network request surfaces as URLError.cancelled, not
+                // CancellationError, so it would otherwise reach the failure alert
+                // below. Whenever the task was cancelled the user asked to stop —
+                // that's not an error worth a modal.
+                if Task.isCancelled || (error as? URLError)?.code == .cancelled {
+                    notify("Transcription cancelled", subtitle: nil)
+                    return
+                }
                 guard TranscriptionFailure.deservesAlert(error, recordedFor: recordedFor) else { return }
                 showAlert("Transcription failed", message: error.localizedDescription)
             }

@@ -1,29 +1,29 @@
 <div align="center">
 
-# 🎙️ Whisper
+# Whisper
 
-### Record. Transcribe. Paste — anywhere.
+**Record. Transcribe. Paste — anywhere.**
 
 A tiny macOS **menu-bar app** that turns your voice into text and drops it straight into whatever app you're using.
 
-![macOS](https://img.shields.io/badge/macOS-15.5%2B-000000?style=flat-square&logo=apple&logoColor=white)
-![Build](https://img.shields.io/badge/Build-Xcode%2026-147EFB?style=flat-square&logo=xcode&logoColor=white)
-![Engine](https://img.shields.io/badge/Engine-Local%20or%20OpenAI-5B8DEF?style=flat-square)
-![UI](https://img.shields.io/badge/UI-Liquid%20Glass-9AD0EC?style=flat-square)
+![macOS](https://img.shields.io/badge/macOS-15.5+-1d1d1f?style=flat&logo=apple&logoColor=white)
+![Build](https://img.shields.io/badge/Build-Xcode_26-1d1d1f?style=flat&logo=xcode&logoColor=white)
+![Engine](https://img.shields.io/badge/Engine-Local_or_OpenAI-1d1d1f?style=flat)
+![UI](https://img.shields.io/badge/UI-Liquid_Glass-1d1d1f?style=flat)
 
 </div>
 
 ---
 
-## ✨ What it does
+## What it does
 
 Press a key, talk, press it again. Whisper records your voice, transcribes it — **on-device** with `openai-whisper` or through the **OpenAI API** — and pastes the text into the frontmost app. That's the whole app.
 
 <table>
 <tr>
-<td align="center" width="33%">🎤<br><b>1 · Record</b><br><sub>Hotkey, mic key, or a click</sub></td>
-<td align="center" width="33%">✍️<br><b>2 · Transcribe</b><br><sub>Locally or via OpenAI</sub></td>
-<td align="center" width="33%">📋<br><b>3 · Paste</b><br><sub>Into the app you're in</sub></td>
+<td align="center" width="33%"><b>1 · Record</b><br><sub>Hotkey, mic key, or a click</sub></td>
+<td align="center" width="33%"><b>2 · Transcribe</b><br><sub>Locally or via OpenAI</sub></td>
+<td align="center" width="33%"><b>3 · Paste</b><br><sub>Into the app you're in</sub></td>
 </tr>
 </table>
 
@@ -32,7 +32,7 @@ Press a key, talk, press it again. Whisper records your voice, transcribes it �
 
 ---
 
-## 🚀 Quick start
+## Quick start
 
 ```bash
 # Only needed for local transcription — skip if you'll use the OpenAI API
@@ -49,7 +49,7 @@ pip install -U openai-whisper
 
 ---
 
-## 🎛️ The menu-bar item
+## The menu-bar item
 
 Click the waveform to open the menu (**Start/Stop**, **Settings**, **Quit**). While transcribing, the icon gently **pulses**. And — depending on the mode you choose — one-press action buttons live right in the menu bar, so common actions never need the menu.
 
@@ -71,9 +71,9 @@ The buttons fade and scale in and out, and the icon stays pinned to the menu bar
 
 ---
 
-## ⚙️ Settings
+## Settings
 
-### 🎧 Transcription
+### Transcription
 
 | Setting | Choices | Notes |
 |:--|:--|:--|
@@ -88,7 +88,7 @@ The buttons fade and scale in and out, and the icon stays pinned to the menu bar
 > [!NOTE]
 > Transcription times out after **10 minutes** locally, **2 minutes** for API requests.
 
-### 📋 Pasting
+### Pasting
 
 | Setting | Default | What it does |
 |:--|:--:|:--|
@@ -98,22 +98,22 @@ The buttons fade and scale in and out, and the icon stays pinned to the menu bar
 > [!WARNING]
 > **Press Enter after paste** will submit forms and run terminal commands the instant text lands. Off by default so you can review first.
 
-### 🔧 General
+### General
 
 | Setting | Details |
 |:--|:--|
 | **Launch at login** | Start Whisper when you sign in *(needs a codesigned build)* |
 | **Start/stop chimes** | The same sounds macOS Dictation uses — on by default |
-| **Menu-Bar Controls** | The [three layout modes](#-the-menu-bar-item) above |
+| **Menu-Bar Controls** | The [three layout modes](#the-menu-bar-item) above |
 | **Hotkey** | System-wide trigger — default <kbd>⌃</kbd><kbd>A</kbd>, rebindable |
 | **Mic Key** | Use the mic key <kbd>F5</kbd> to toggle recording instead of opening Dictation |
 
-### ✅ Setup
+### Setup
 
 A first-run checklist that requests **Microphone** and **Accessibility** (and optional **Notifications**), and reports whether your chosen engine is ready to go. Revisit it any time from Settings.
 
 <details>
-<summary><b>🎙️ How the mic key remap works</b></summary>
+<summary><b>How the mic key remap works</b></summary>
 
 <br>
 
@@ -125,16 +125,16 @@ The remap lives **only while Whisper runs** and is removed when you disable it o
 
 ---
 
-## 🔒 Privacy
+## Privacy
 
-- 🎤 The microphone is **live only while recording**.
-- 🔑 API keys live in the **Keychain**, not preferences (keys from older builds are migrated automatically).
-- 📝 Transcripts are **never written to logs**; temporary recordings are deleted after success, failure, timeout, or cancellation.
-- ⏎ Enter is never pressed after pasting unless you opt in — so you can review before anything runs.
+- The microphone is **live only while recording**.
+- API keys live in the **Keychain**, not preferences (keys from older builds are migrated automatically).
+- Transcripts are **never written to logs**; temporary recordings are deleted after success, failure, timeout, or cancellation.
+- Enter is never pressed after pasting unless you opt in — so you can review before anything runs.
 
 ---
 
-## 🧩 Requirements
+## Requirements
 
 | | |
 |:--|:--|
@@ -146,7 +146,7 @@ The remap lives **only while Whisper runs** and is removed when you disable it o
 
 ---
 
-## 🛠️ Build & test
+## Build & test
 
 ```bash
 # Build & run
@@ -157,7 +157,7 @@ xcodebuild test -project Whisper.xcodeproj -scheme Whisper -destination 'platfor
 ```
 
 <details>
-<summary><b>❓ Troubleshooting</b></summary>
+<summary><b>Troubleshooting</b></summary>
 
 <br>
 
