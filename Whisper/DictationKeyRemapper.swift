@@ -36,6 +36,7 @@ enum UserKeyMapping {
     /// belong to other tools.
     static func parse(_ output: String) throws -> [KeyMapping] {
         let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("RegistryID") { return try parseServiceTable(trimmed) }
         guard !trimmed.isEmpty, trimmed != "(null)" else { return [] }
 
         guard let data = trimmed.data(using: .utf8),
@@ -51,6 +52,40 @@ enum UserKeyMapping {
             }
             return KeyMapping(src: src, dst: dst)
         }
+    }
+
+    /// macOS 27 prints one row per HID service instead of a single value:
+    ///
+    ///     RegistryID  Key                   Value
+    ///     10000093c   UserKeyMapping   (
+    ///             { ... }
+    ///     )
+    ///     100000aa4   UserKeyMapping   (null)
+    ///
+    /// A `--set` without `--matching` still writes every service, but some (non-keyboard)
+    /// services never take the value, so rows can differ. Returns the union of every
+    /// row's mappings in first-seen order, so writing it back drops no tool's entries.
+    private static func parseServiceTable(_ table: String) throws -> [KeyMapping] {
+        var values: [String] = []
+        for line in table.split(separator: "\n", omittingEmptySubsequences: false).dropFirst() {
+            let fields = line.split(separator: " ", maxSplits: 2, omittingEmptySubsequences: true)
+            if fields.count == 3, fields[1] == "UserKeyMapping",
+               fields[0].allSatisfy(\.isHexDigit) {
+                values.append(String(fields[2]))
+            } else if !values.isEmpty {
+                values[values.count - 1] += "\n" + line
+            } else if !line.allSatisfy(\.isWhitespace) {
+                throw ParseError.unrecognized(table)
+            }
+        }
+
+        var result: [KeyMapping] = []
+        for value in values {
+            for mapping in try parse(value) where !result.contains(mapping) {
+                result.append(mapping)
+            }
+        }
+        return result
     }
 
     private static func number(_ value: Any?) -> UInt64? {

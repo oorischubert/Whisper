@@ -42,6 +42,51 @@ final class DictationKeyRemapperTests: XCTestCase {
         ])
     }
 
+    /// macOS 27 prints a per-service table instead of one plist. Rows can disagree
+    /// (some services never take the value), so the result is their union.
+    func testParseReadsMacOS27ServiceTable() throws {
+        let output = """
+        RegistryID  Key                   Value
+        10000093c   UserKeyMapping   (
+                {
+                HIDKeyboardModifierMappingDst = 30064771176;
+                HIDKeyboardModifierMappingSrc = 51539607759;
+            }
+        )
+        100000aa4   UserKeyMapping   (null)
+        1000007bd   UserKeyMapping   (
+                {
+                HIDKeyboardModifierMappingDst = 30064771176;
+                HIDKeyboardModifierMappingSrc = 51539607759;
+            },
+                {
+                HIDKeyboardModifierMappingDst = 30064771113;
+                HIDKeyboardModifierMappingSrc = 30064771129;
+            }
+        )
+        """
+
+        XCTAssertEqual(try UserKeyMapping.parse(output), [.whisper, capsToEsc])
+    }
+
+    func testParseReadsMacOS27ServiceTableWithNoMappings() throws {
+        let output = """
+        RegistryID  Key                   Value
+        10000093c   UserKeyMapping   (null)
+        1000007bd   UserKeyMapping   (
+        )
+        """
+        XCTAssertEqual(try UserKeyMapping.parse(output), [])
+    }
+
+    func testParseThrowsOnMalformedServiceTableRow() {
+        let output = """
+        RegistryID  Key                   Value
+        10000093c   UserKeyMapping   ( { SomeOtherKey = 1; } )
+        """
+        XCTAssertThrowsError(try UserKeyMapping.parse(output))
+    }
+
     func testParseAcceptsHexValues() throws {
         let output = """
         (
