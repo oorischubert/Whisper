@@ -17,7 +17,7 @@ A tiny macOS **menu-bar app** that turns your voice into text and drops it strai
 
 ## What it does
 
-Press a key, talk, press it again. Whisper records your voice, transcribes it — **on-device** with `openai-whisper` or through the **OpenAI API** — and pastes the text into the frontmost app. That's the whole app.
+Press a key, talk, press it again. Whisper records your voice, transcribes it — **on-device** with Whisper models running on Apple's Neural Engine, or through the **OpenAI API** — and pastes the text into the frontmost app. That's the whole app.
 
 <table>
 <tr>
@@ -30,22 +30,19 @@ Press a key, talk, press it again. Whisper records your voice, transcribes it �
 > [!TIP]
 > Nothing to say? Start and stop without speaking and Whisper silently ignores it — no empty paste, no error.
 
+> [!NOTE]
+> The start chime plays once the mic is actually listening. Bluetooth headsets like AirPods take about a second to switch on their mic, so wait for the chime before you talk.
+
 ---
 
 ## Quick start
 
-```bash
-# Only needed for local transcription — skip if you'll use the OpenAI API
-brew install ffmpeg
-pip install -U openai-whisper
-```
-
 1. Open `Whisper.xcodeproj`, set your **Team** under Signing & Capabilities, and run.
-2. Work through the first-run **Setup** checklist — grant **Microphone** and **Accessibility**.
+2. Work through the first-run **Setup** checklist — grant **Microphone** and **Accessibility**, and click **Download** to fetch the on-device model.
 3. Press <kbd>⌃</kbd><kbd>A</kbd> (or the mic key) and start dictating.
 
 > [!NOTE]
-> Using a virtualenv or conda env? Point Whisper at that env's Python — e.g. `~/miniconda3/envs/whisper/bin/python`.
+> There's nothing else to install — no Python, no ffmpeg. Models download inside the app.
 
 ---
 
@@ -77,15 +74,15 @@ The buttons fade and scale in and out, and the icon stays pinned to the menu bar
 
 | Setting | Choices | Notes |
 |:--|:--|:--|
-| **Engine** | Local Whisper · OpenAI API | Flip between an on-device model and the cloud |
+| **Engine** | On This Mac · OpenAI API | Flip between an on-device model and the cloud |
 | **API Key** | — | Stored in the **Keychain**, never in preferences |
 | **API Model** | any transcribe model | Default `gpt-4o-mini-transcribe` |
-| **Local Model** | `tiny` · `base` · `small` · `medium` · `large` | Bigger = more accurate, slower. Default `base` |
-| **Python** | Browse · Detect · Test | *Detect* finds a Python; *Test* verifies `whisper` is installed |
+| **Local Model** | Tiny · Base · Small · Large v3 Turbo · Large v3 | Pick one; if it isn't downloaded yet, Whisper offers to download it. Each row shows progress while downloading and a trash button to delete it. Default Base |
 | **Language** | Auto-detect + 14 languages | English, Hebrew, Arabic, French, German, Spanish, Russian, Italian, Portuguese, Chinese, Japanese, Korean, Hindi, Turkish |
 | **Last Transcript** | Copy to clipboard | A one-click copy of your most recent result |
 
 > [!NOTE]
+> Models are stored in `~/Library/Application Support/Whisper/Models` and run entirely offline once downloaded. The chosen model stays loaded while you're dictating and is freed after 15 idle minutes; the next dictation reloads it in a second or two.
 > Transcription times out after **10 minutes** locally, **2 minutes** for API requests.
 
 ### Pasting
@@ -141,7 +138,7 @@ The remap lives **only while Whisper runs** and is removed when you disable it o
 | **Run** | macOS **15.5+** — on macOS 26 (Tahoe) the UI renders with Apple's **Liquid Glass**; earlier releases fall back to translucent materials |
 | **Build** | **Xcode 26+** (Liquid Glass ships in the macOS 26 SDK) |
 | **Permissions** | Microphone, plus Accessibility to paste into other apps |
-| **Local engine** | Python 3.8+, the `openai-whisper` package, and `ffmpeg` on that Python's PATH |
+| **Local engine** | Nothing extra — built in via [WhisperKit](https://github.com/argmaxinc/WhisperKit). Apple silicon recommended |
 | **API engine** | An OpenAI API key |
 
 ---
@@ -163,9 +160,8 @@ xcodebuild test -project Whisper.xcodeproj -scheme Whisper -destination 'platfor
 
 | Symptom | Fix |
 |:--|:--|
-| *"Could not find a Python executable"* | Set a valid path in Settings, or click **Detect** |
-| *"No module named whisper"* | `pip install -U openai-whisper` into the Python you selected |
-| **ffmpeg not found** | `brew install ffmpeg`, and make sure it's on that Python's PATH |
+| *"The … model isn't downloaded yet"* | Open **Settings › Transcription** and download it, or pick one that's downloaded |
+| **Model download failed** | Check your internet connection and click **Retry** |
 | **Paste doesn't work** | Grant **Accessibility** — the transcript stays on the clipboard either way |
 | **Launch at Login doesn't stick** | Codesigning is required; try a signed release build |
 

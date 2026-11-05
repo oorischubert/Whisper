@@ -6,8 +6,6 @@ struct TranscriptionConfiguration: Sendable {
     let apiModel: String
     let localModel: String
     let language: String?
-    let pythonExecutablePath: String?
-    let pythonBookmarkData: Data?
 
     init(settings: AppSettings = .shared) {
         useAPI = settings.useAPI
@@ -15,23 +13,19 @@ struct TranscriptionConfiguration: Sendable {
         apiModel = settings.apiModel
         localModel = settings.localModel
         language = settings.language
-        pythonExecutablePath = settings.resolvePythonExecutable()
-        pythonBookmarkData = settings.whisperBookmarkData
     }
 }
 
 enum TranscriberError: Error, LocalizedError {
-    case pythonNotFound
-    case failedMessage(Int32, String)
+    /// The chosen on-device model hasn't been downloaded (or is still downloading).
+    case modelNotDownloaded(String)
     case outputMissing
     case timedOut
 
     var errorDescription: String? {
         switch self {
-        case .pythonNotFound:
-            return "Could not find a Python executable. Set its path in Settings."
-        case .failedMessage(let code, let message):
-            return "Whisper exited with status \(code).\n\n\(message)"
+        case .modelNotDownloaded(let name):
+            return "The \(name) model isn't downloaded yet. Download it in Settings › Transcription."
         case .outputMissing:
             return "Transcription returned no text."
         case .timedOut:
@@ -49,156 +43,30 @@ final class Transcriber {
         if configuration.useAPI {
             return try await Self.transcribeAPI(audioURL: audioURL, configuration: configuration)
         }
-        let worker = Task.detached(priority: .userInitiated) {
-            try Self.transcribeLocal(audioURL: audioURL, configuration: configuration, timeout: timeout)
-        }
-        return try await withTaskCancellationHandler {
-            try await worker.value
-        } onCancel: {
-            worker.cancel()
-        }
-    }
-
-    private static func transcribeLocal(
-        audioURL: URL,
-        configuration: TranscriptionConfiguration,
-        timeout: TimeInterval
-    ) throws -> String {
-        guard let configuredPath = configuration.pythonExecutablePath else {
-            throw TranscriberError.pythonNotFound
-        }
-
-        let originalPath = (configuredPath as NSString).expandingTildeInPath
-        let fileManager = FileManager.default
-        var pythonPath = originalPath
-        if !fileManager.isExecutableFile(atPath: pythonPath) {
-            let directory = (originalPath as NSString).deletingLastPathComponent
-            let alternatives = ["python3", "python"].map {
-                (directory as NSString).appendingPathComponent($0)
-            }
-            guard let executable = alternatives.first(where: fileManager.isExecutableFile(atPath:)) else {
-                throw TranscriberError.failedMessage(
-                    -2,
-                    "Configured Python is not executable: \(originalPath)"
-                )
-            }
-            pythonPath = executable
-        }
-
-        let outputDirectory = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("whisper_out_\(UUID().uuidString)")
-        try fileManager.createDirectory(at: outputDirectory, withIntermediateDirectories: true)
-        defer { try? fileManager.removeItem(at: outputDirectory) }
-
-        return try withSecurityScopedAccess(configuration.pythonBookmarkData) {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: pythonPath)
-            var arguments = [
-                "-m", "whisper", audioURL.path,
-                "--model", configuration.localModel,
-                "--fp16", "False",
-                "--output_format", "txt",
-                "--verbose", "False",
-                "--output_dir", outputDirectory.path
-            ]
-            if let language = configuration.language,
-               !language.isEmpty,
-               language.lowercased() != "auto" {
-                arguments += ["--language", language]
-            }
-            process.arguments = arguments
-
-            var environment = ProcessInfo.processInfo.environment
-            let pythonBin = (pythonPath as NSString).deletingLastPathComponent
-            for directory in [pythonBin, "/opt/homebrew/bin", "/usr/local/bin"] {
-                let existing = environment["PATH"] ?? ""
-                if !existing.split(separator: ":").contains(Substring(directory)) {
-                    environment["PATH"] = existing.isEmpty ? directory : directory + ":" + existing
-                }
-            }
-            process.environment = environment
-
-            // A file avoids the classic pipe-capacity deadlock when a child emits lots of output.
-            let diagnosticsURL = outputDirectory.appendingPathComponent("process.log")
-            fileManager.createFile(atPath: diagnosticsURL.path, contents: nil)
-            let diagnostics = try FileHandle(forWritingTo: diagnosticsURL)
-            process.standardOutput = diagnostics
-            process.standardError = diagnostics
-
-            #if DEBUG
-            NSLog("[Whisper] Starting local transcription with model \(configuration.localModel)")
-            #endif
-
-            do {
-                try process.run()
-            } catch {
-                try? diagnostics.close()
-                throw error
-            }
-
-            let startedAt = Date()
-            while process.isRunning {
-                if Task.isCancelled {
-                    process.terminate()
-                    process.waitUntilExit()
-                    try? diagnostics.close()
-                    throw CancellationError()
-                }
-                if Date().timeIntervalSince(startedAt) > timeout {
-                    process.terminate()
-                    process.waitUntilExit()
-                    try? diagnostics.close()
-                    throw TranscriberError.timedOut
-                }
-                Thread.sleep(forTimeInterval: 0.1)
-            }
-            process.waitUntilExit()
-            try? diagnostics.close()
-
-            if process.terminationStatus != 0 {
-                let data = (try? Data(contentsOf: diagnosticsURL)) ?? Data()
-                var message = String(data: data, encoding: .utf8) ?? "No diagnostic output."
-                message = message.trimmingCharacters(in: .whitespacesAndNewlines)
-                let lowercased = message.lowercased()
-                var hints: [String] = []
-                if lowercased.contains("no module named whisper") || lowercased.contains("module named 'whisper'") {
-                    hints.append("The selected Python does not have openai-whisper installed.")
-                }
-                if lowercased.contains("ffmpeg") && (lowercased.contains("not found") || lowercased.contains("no such file")) {
-                    hints.append("ffmpeg was not found. Install it or add it to PATH.")
-                }
-                if !hints.isEmpty {
-                    message += "\n\n" + hints.joined(separator: "\n")
-                }
-                throw TranscriberError.failedMessage(process.terminationStatus, message)
-            }
-
-            let baseName = audioURL.deletingPathExtension().lastPathComponent
-            let transcriptURL = outputDirectory.appendingPathComponent("\(baseName).txt")
-            guard let data = try? Data(contentsOf: transcriptURL),
-                  let transcript = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  !transcript.isEmpty else {
-                throw TranscriberError.outputMissing
-            }
-            return transcript
+        return try await Self.withTimeout(timeout) {
+            try await LocalWhisperEngine.shared.transcribe(
+                audioURL: audioURL,
+                modelID: configuration.localModel,
+                language: configuration.language
+            )
         }
     }
 
-    private static func withSecurityScopedAccess<T>(_ bookmarkData: Data?, body: () throws -> T) rethrows -> T {
-        var scopedURL: URL?
-        if let bookmarkData {
-            var stale = false
-            if let url = try? URL(
-                resolvingBookmarkData: bookmarkData,
-                options: .withSecurityScope,
-                relativeTo: nil,
-                bookmarkDataIsStale: &stale
-            ), url.startAccessingSecurityScopedResource() {
-                scopedURL = url
+    /// Runs `body`, cancelling it and throwing `.timedOut` if it outlives `seconds`.
+    private static func withTimeout<T: Sendable>(
+        _ seconds: TimeInterval,
+        _ body: @escaping @Sendable () async throws -> T
+    ) async throws -> T {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask { try await body() }
+            group.addTask {
+                try await Task.sleep(for: .seconds(seconds))
+                throw TranscriberError.timedOut
             }
+            defer { group.cancelAll() }
+            guard let result = try await group.next() else { throw CancellationError() }
+            return result
         }
-        defer { scopedURL?.stopAccessingSecurityScopedResource() }
-        return try body()
     }
 
     private static func transcribeAPI(

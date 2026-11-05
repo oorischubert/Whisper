@@ -32,9 +32,8 @@ final class CoreBehaviorTests: XCTestCase {
 
     func testRealFailuresAlwaysReportHoweverBriefTheRecording() {
         let brief: TimeInterval = 0.2
-        XCTAssertTrue(TranscriptionFailure.deservesAlert(TranscriberError.pythonNotFound, recordedFor: brief))
+        XCTAssertTrue(TranscriptionFailure.deservesAlert(TranscriberError.modelNotDownloaded("Base"), recordedFor: brief))
         XCTAssertTrue(TranscriptionFailure.deservesAlert(TranscriberError.timedOut, recordedFor: brief))
-        XCTAssertTrue(TranscriptionFailure.deservesAlert(TranscriberError.failedMessage(1, "boom"), recordedFor: brief))
         XCTAssertTrue(TranscriptionFailure.deservesAlert(
             NSError(domain: "Whisper", code: -2, userInfo: [NSLocalizedDescriptionKey: "API rejected the key"]),
             recordedFor: brief
@@ -110,5 +109,35 @@ final class CoreBehaviorTests: XCTestCase {
 
         XCTAssertFalse(snapshot.restore(to: pasteboard, ifUnchangedSince: transcriptChangeCount))
         XCTAssertEqual(pasteboard.string(forType: .string), "new user content")
+    }
+
+    // MARK: - Local models
+
+    func testLegacyPythonModelNamesMigrateToCatalogModels() {
+        XCTAssertEqual(LocalModel.migratedID(from: "tiny"), "openai_whisper-tiny")
+        XCTAssertEqual(LocalModel.migratedID(from: "base"), "openai_whisper-base")
+        XCTAssertEqual(LocalModel.migratedID(from: "small"), "openai_whisper-small")
+        XCTAssertEqual(LocalModel.migratedID(from: "medium"), "openai_whisper-large-v3-v20240930_626MB")
+        XCTAssertEqual(LocalModel.migratedID(from: "large"), "openai_whisper-large-v3_947MB")
+    }
+
+    func testMigrationKeepsCatalogIDsAndFallsBackToDefault() {
+        for model in LocalModel.catalog {
+            XCTAssertEqual(LocalModel.migratedID(from: model.id), model.id)
+        }
+        XCTAssertEqual(LocalModel.migratedID(from: nil), LocalModel.defaultID)
+        XCTAssertEqual(LocalModel.migratedID(from: ""), LocalModel.defaultID)
+        XCTAssertEqual(LocalModel.migratedID(from: "something-unknown"), LocalModel.defaultID)
+        XCTAssertNotNil(LocalModel.model(withID: LocalModel.defaultID))
+    }
+
+    func testCatalogIDsAreUniqueWithExactlyOneRecommendation() {
+        let ids = LocalModel.catalog.map(\.id)
+        XCTAssertEqual(Set(ids).count, ids.count)
+        XCTAssertEqual(LocalModel.catalog.filter(\.isRecommended).count, 1)
+    }
+
+    func testAModelWithoutTheReadyMarkerIsNotInstalled() {
+        XCTAssertFalse(LocalModelStorage.isInstalled("not-a-real-model-\(UUID().uuidString)"))
     }
 }

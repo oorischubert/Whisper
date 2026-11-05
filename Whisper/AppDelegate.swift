@@ -14,7 +14,7 @@ enum TranscriptionFailure {
 
     static func deservesAlert(_ error: Error, recordedFor: TimeInterval) -> Bool {
         // Only an empty transcript is ever written off as a misclick. A real
-        // failure — no Python, a dead key, a rejected request — always reports,
+        // failure — a missing model, a dead key, a rejected request — always reports,
         // however brief the recording was.
         guard let error = error as? TranscriberError,
               case .outputMissing = error else { return true }
@@ -42,6 +42,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         setupGlobalShortcut()
         setupDictationKey()
         UNUserNotificationCenter.current().delegate = self
+        // Starts loading the chosen on-device model so the first dictation is quick.
+        _ = LocalModelManager.shared
 
         if !AppSettings.shared.hasCompletedOnboarding {
             DispatchQueue.main.async { [weak self] in self?.showPreferences(initialTab: .setup) }
@@ -50,7 +52,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     func applicationWillTerminate(_ notification: Notification) {
         transcriptionTask?.cancel()
-        if activity.isRecording, let url = recorder.stop() {
+        // Also covers quitting during the short tail after a stop press.
+        if let url = recorder.stop() {
             try? FileManager.default.removeItem(at: url)
         }
         // Synchronous by necessity: a Task would not finish before we exit, and leaving
@@ -272,13 +275,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
     }
 
+    /// Longest we hold the "speak now" cues while waiting for the mic to wake.
+    private static let micWarmupTimeout: TimeInterval = 2.5
+    /// Bluetooth mics deliver audio a beat late, so keep listening this long after a
+    /// stop press or the last syllable gets clipped.
+    private static let recordingTail: Duration = .milliseconds(250)
+
     private func startRecording() {
         do {
             try recorder.start()
-            SoundPlayer.playStart()
-            // Mic and audio are live now; hold the pill's visual change back a beat so it
-            // doesn't compound with the menu-bar shift from the OS mic indicator.
-            setActivity(.recording(startedAt: Date()), pillDelay: 0.1)
+            let startedAt = Date()
+            // Recording starts now (so stop and cancel work right away), but the chime
+            // and pill — the cues to start talking — wait until the mic really hears.
+            // The timeout doubles as a fallback if the mic never reports in.
+            setActivity(.recording(startedAt: startedAt), pillDelay: Self.micWarmupTimeout)
+            Task { [weak self] in
+                guard let self else { return }
+                await self.recorder.waitUntilLive(timeout: Self.micWarmupTimeout)
+                guard case .recording(let current) = self.activity, current == startedAt else { return }
+                SoundPlayer.playStart()
+                // Hold the pill back a beat so it doesn't compound with the menu-bar
+                // shift from the OS mic indicator.
+                self.setActivity(self.activity, pillDelay: 0.1)
+            }
         } catch {
             showAlert("Microphone unavailable", message: error.localizedDescription)
         }
@@ -287,20 +306,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private func stopAndTranscribe() {
         guard case .recording(let startedAt) = activity else { return }
         let recordedFor = Date().timeIntervalSince(startedAt)
-        // Chime only after the recorder is closed, so it cannot land in the audio.
-        let audioURL = recorder.stop()
-        SoundPlayer.playStop()
         setActivity(.transcribing)
-
-        guard let audioURL else {
-            setActivity(.idle)
-            showAlert("Recording failed", message: "No audio file was created.")
-            return
-        }
 
         let configuration = TranscriptionConfiguration()
         transcriptionTask = Task { [weak self] in
             guard let self else { return }
+            // Cancelling during the tail just ends it early; the recorder still closes.
+            try? await Task.sleep(for: Self.recordingTail)
+            // Chime only after the recorder is closed, so it cannot land in the audio.
+            let audioURL = self.recorder.stop()
+            SoundPlayer.playStop()
+
+            guard let audioURL else {
+                self.transcriptionTask = nil
+                self.setActivity(.idle)
+                self.showAlert("Recording failed", message: "No audio file was created.")
+                return
+            }
+
             defer {
                 try? FileManager.default.removeItem(at: audioURL)
                 self.transcriptionTask = nil
@@ -308,6 +331,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             }
 
             do {
+                try Task.checkCancellation() // cancelled during the tail
                 let attributes = try FileManager.default.attributesOfItem(atPath: audioURL.path)
                 let byteCount = (attributes[.size] as? NSNumber)?.intValue ?? 0
                 // Started and stopped without speaking: nothing to transcribe, and
@@ -356,6 +380,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                     return
                 }
                 guard TranscriptionFailure.deservesAlert(error, recordedFor: recordedFor) else { return }
+                if case .modelNotDownloaded = error as? TranscriberError {
+                    offerModelDownload(message: error.localizedDescription)
+                    return
+                }
                 showAlert("Transcription failed", message: error.localizedDescription)
             }
         }
@@ -378,8 +406,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         showPreferences(initialTab: .setup)
     }
 
-    private func showPreferences(initialTab: PreferencesView.PrefsTab) {
+    /// The chosen local model isn't on this Mac: take the user straight to the model list.
+    private func offerModelDownload(message: String) {
+        let alert = NSAlert()
+        alert.messageText = "Download a model first"
+        alert.informativeText = message
+        alert.addButton(withTitle: "Open Settings")
+        alert.addButton(withTitle: "Not Now")
+        NSApp.activate(ignoringOtherApps: true)
+        if alert.runModal() == .alertFirstButtonReturn {
+            showPreferences(initialTab: .transcription, switchingTab: true)
+        }
+    }
+
+    private func showPreferences(initialTab: PreferencesView.PrefsTab, switchingTab: Bool = false) {
         if let windowController = preferencesWindowController {
+            if switchingTab {
+                windowController.window?.contentViewController =
+                    NSHostingController(rootView: PreferencesView(initialTab: initialTab))
+            }
             windowController.showWindow(nil)
             windowController.window?.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)

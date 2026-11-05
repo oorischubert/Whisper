@@ -38,20 +38,9 @@ final class AppSettings: ObservableObject {
 
     private let defaults = UserDefaults.standard
 
+    /// A `LocalModel.catalog` ID — the on-device model used when not on the API.
     @Published var localModel: String {
         didSet { defaults.set(localModel, forKey: Keys.localModel) }
-    }
-
-    // Python executable used to run Whisper locally (python -m whisper ...)
-    @Published var pythonExecutablePath: String {
-        didSet {
-            defaults.set(pythonExecutablePath, forKey: Keys.pythonExecutablePath)
-            attemptBookmarkForPythonPath()
-        }
-    }
-    // Security-scoped bookmark to the executable directory (for App Sandbox access)
-    @Published var whisperBookmarkData: Data? { // name kept for backward-compat
-        didSet { defaults.set(whisperBookmarkData, forKey: Keys.whisperBookmarkData) }
     }
 
     @Published var pressEnterAfterPaste: Bool {
@@ -127,12 +116,13 @@ final class AppSettings: ObservableObject {
     }
 
     private init() {
-        let model = defaults.string(forKey: Keys.localModel) ?? "base"
+        // Older builds stored the Python engine's short names ("base", "large"…).
+        let model = LocalModel.migratedID(from: defaults.string(forKey: Keys.localModel))
         self.localModel = model
-
-        let py = defaults.string(forKey: Keys.pythonExecutablePath) ?? AppSettings.defaultPythonPath()
-        self.pythonExecutablePath = py
-        self.whisperBookmarkData = defaults.data(forKey: Keys.whisperBookmarkData)
+        defaults.set(model, forKey: Keys.localModel)
+        // Leftovers from the Python engine, which is gone.
+        defaults.removeObject(forKey: Keys.legacyPythonExecutablePath)
+        defaults.removeObject(forKey: Keys.legacyWhisperBookmarkData)
 
         self.pressEnterAfterPaste = defaults.object(forKey: Keys.pressEnterAfterPaste) as? Bool ?? false
         self.preserveClipboard = defaults.object(forKey: Keys.preserveClipboard) as? Bool ?? true
@@ -161,90 +151,10 @@ final class AppSettings: ObservableObject {
         applyLaunchAtLogin()
     }
 
-    func resolvePythonExecutable() -> String? {
-        // User-defined path takes precedence (expand ~ for robustness)
-        if !pythonExecutablePath.isEmpty {
-            return (pythonExecutablePath as NSString).expandingTildeInPath
-        }
-        var candidates: [String] = []
-        // Common system/Homebrew locations
-        candidates += [
-            "/opt/homebrew/bin/python3",
-            "/usr/local/bin/python3",
-            "/usr/bin/python3"
-        ]
-        // Search PATH for 'python3' then 'python'
-        if let pathEnv = ProcessInfo.processInfo.environment["PATH"] {
-            let parts = pathEnv.split(separator: ":").map(String.init)
-            for dir in parts {
-                let expanded = (dir as NSString).expandingTildeInPath
-                for name in ["python3", "python"] {
-                    let candidate = URL(fileURLWithPath: expanded).appendingPathComponent(name).path
-                    candidates.append(candidate)
-                }
-            }
-        }
-        for c in candidates {
-            if FileManager.default.isExecutableFile(atPath: c) {
-                return c
-            }
-        }
-        return nil
-    }
-
-    func updatePythonPath(with url: URL) {
-        pythonExecutablePath = url.path
-        let dirURL = url.deletingLastPathComponent()
-        do {
-            let data = try dirURL.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil)
-            whisperBookmarkData = data
-        } catch {
-            // Ignore bookmark errors; path may still work if not fully sandboxed
-        }
-    }
-
-    // Temporary shim to keep old call sites working if any remain
-    func updateWhisperPath(with url: URL) { updatePythonPath(with: url) }
-
-    private func attemptBookmarkForPythonPath() {
-        let path = pythonExecutablePath.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !path.isEmpty else { return }
-        let expanded = (path as NSString).expandingTildeInPath
-        let url = URL(fileURLWithPath: expanded)
-        let dirURL = url.deletingLastPathComponent()
-        var isDir: ObjCBool = false
-        if FileManager.default.fileExists(atPath: dirURL.path, isDirectory: &isDir), isDir.boolValue {
-            if let data = try? dirURL.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil) {
-                whisperBookmarkData = data
-            }
-        }
-    }
-
-    func withWhisperAccess<T>(_ body: () throws -> T) rethrows -> T {
-        var scopedURL: URL?
-        if let data = whisperBookmarkData {
-            var stale = false
-            if let url = try? URL(resolvingBookmarkData: data, options: .withSecurityScope, relativeTo: nil, bookmarkDataIsStale: &stale) {
-                if url.startAccessingSecurityScopedResource() {
-                    scopedURL = url
-                }
-            }
-        }
-        defer { scopedURL?.stopAccessingSecurityScopedResource() }
-        return try body()
-    }
-
-    private static func defaultPythonPath() -> String {
-        if FileManager.default.isExecutableFile(atPath: "/opt/homebrew/bin/python3") { return "/opt/homebrew/bin/python3" }
-        if FileManager.default.isExecutableFile(atPath: "/usr/local/bin/python3") { return "/usr/local/bin/python3" }
-        if FileManager.default.isExecutableFile(atPath: "/usr/bin/python3") { return "/usr/bin/python3" }
-        return ""
-    }
-
     enum Keys {
         static let localModel = "localModel"
-        static let pythonExecutablePath = "pythonExecutablePath"
-        static let whisperBookmarkData = "whisperBookmarkData"
+        static let legacyPythonExecutablePath = "pythonExecutablePath"
+        static let legacyWhisperBookmarkData = "whisperBookmarkData"
         static let pressEnterAfterPaste = "pressEnterAfterPaste"
         static let preserveClipboard = "preserveClipboard"
         static let dictationKeyEnabled = "dictationKeyEnabled"

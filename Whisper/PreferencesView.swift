@@ -51,12 +51,14 @@ extension View {
 struct PreferencesView: View {
     @StateObject private var settings = AppSettings.shared
     @StateObject private var remapper = DictationKeyRemapper.shared
+    @StateObject private var modelManager = LocalModelManager.shared
+    @State private var modelPendingDownload: LocalModel?
+    @State private var modelPendingDeletion: LocalModel?
     @State private var micKeyTestResult: MicKeyTestResult?
     @State private var didCopyTranscript = false
     @State private var transcriptContentHeight: CGFloat = 0
     @State private var copyFlashToken = 0
 
-    private let models = ["tiny", "base", "small", "medium", "large"]
     private let apiModels: [(id: String, cost: String)] = [
         ("gpt-4o-transcribe", "$0.006/min"),
         ("gpt-4o-mini-transcribe", "$0.003/min"),
@@ -270,12 +272,12 @@ struct PreferencesView: View {
             SectionCard(title: "Transcription engine") {
                 PermissionRow(
                     symbol: settings.useAPI ? "cloud.fill" : "laptopcomputer",
-                    title: settings.useAPI ? "OpenAI API" : "Local Whisper",
+                    title: settings.useAPI ? "OpenAI API" : "On This Mac",
                     detail: engineReadiness.detail,
                     isReady: engineReadiness.ready,
-                    actionTitle: engineReadiness.ready ? nil : "Configure"
+                    actionTitle: engineAction?.title
                 ) {
-                    tab = .transcription
+                    engineAction?.run()
                 }
             }
 
@@ -321,15 +323,40 @@ struct PreferencesView: View {
             let ready = !(settings.apiKey ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             return (ready, ready ? "API key is stored securely in Keychain." : "Add an API key to use cloud transcription.")
         }
-        guard let path = settings.resolvePythonExecutable() else {
-            return (false, "Choose a Python installation containing openai-whisper.")
+        guard let model = selectedLocalModel else {
+            return (false, "Choose a model to transcribe on this Mac.")
         }
-        return (
-            FileManager.default.isExecutableFile(atPath: path),
-            FileManager.default.isExecutableFile(atPath: path)
-                ? "Python is configured. Use Test to verify the Whisper package."
-                : "The configured Python path is not executable."
-        )
+        switch modelManager.state(for: model) {
+        case .ready:
+            return (true, "\(model.name) is downloaded. Everything stays on this Mac.")
+        case .downloading(let fraction):
+            return (false, "Downloading \(model.name)… \(Int(fraction * 100))%")
+        case .preparing:
+            return (false, "Getting \(model.name) ready…")
+        case .failed(let message):
+            return (false, "Download failed: \(message)")
+        case .notDownloaded:
+            return (false, "Download the \(model.name) model (\(model.downloadSize)) to transcribe on this Mac.")
+        }
+    }
+
+    /// What the Setup row's button does — for a local model, it downloads right there.
+    private var engineAction: (title: String, run: () -> Void)? {
+        if settings.useAPI {
+            return engineReadiness.ready ? nil : ("Configure", { tab = .transcription })
+        }
+        guard let model = selectedLocalModel else {
+            return ("Choose", { tab = .transcription })
+        }
+        switch modelManager.state(for: model) {
+        case .notDownloaded: return ("Download", { modelManager.download(model) })
+        case .failed: return ("Retry", { modelManager.download(model) })
+        case .downloading, .preparing, .ready: return nil
+        }
+    }
+
+    private var selectedLocalModel: LocalModel? {
+        LocalModel.model(withID: settings.localModel)
     }
 
     private func requestMicrophoneAccess() {
@@ -360,8 +387,14 @@ struct PreferencesView: View {
 
     private var transcriptionView: some View {
         VStack(alignment: .leading, spacing: 16) {
-            SectionCard(title: "Engine", subtitle: "Choose between the OpenAI API or a local Python-based Whisper.") {
-                Toggle("Use OpenAI API (instead of local Whisper CLI)", isOn: $settings.useAPI)
+            SectionCard(title: "Engine", subtitle: "Transcribe privately on this Mac, or send audio to OpenAI.") {
+                Picker("", selection: $settings.useAPI) {
+                    Text("On This Mac").tag(false)
+                    Text("OpenAI API").tag(true)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(maxWidth: 320)
 
                 if settings.useAPI {
                     VStack(alignment: .leading, spacing: 12) {
@@ -396,45 +429,7 @@ struct PreferencesView: View {
                         }
                     }
                 } else {
-                    VStack(alignment: .leading, spacing: 12) {
-                        HStack {
-                            Text("Local Model").frame(width: labelWidth, alignment: .trailing)
-                            Picker("", selection: $settings.localModel) {
-                                ForEach(models, id: \.self) { Text($0) }
-                            }
-                            .pickerStyle(.segmented)
-                        }
-                        HStack {
-                            Text("Python Executable").frame(width: labelWidth, alignment: .trailing)
-                            TextField("/opt/homebrew/bin/python3", text: $settings.pythonExecutablePath)
-                                .textFieldStyle(.roundedBorder)
-                                .font(.system(.body, design: .monospaced))
-                            Button("Browse…") { browseForPython() }.glassButton()
-                            Button("Detect") { detectPython() }.glassButton()
-                            Button(testPythonInProgress ? "Testing…" : "Test") { testPython() }
-                                .glassButton()
-                                .disabled(testPythonInProgress)
-                        }
-                        Text("Tip: Point to your env’s Python (e.g., ~/miniconda3/envs/whisper/bin/python) so the app runs \"python -m whisper\" inside it.")
-                            .font(.footnote)
-                            .foregroundColor(.secondary)
-                        if let tmsg = testPythonMessage {
-                            HStack {
-                                Spacer()
-                                Text(tmsg)
-                                    .foregroundColor(testPythonColor)
-                                    .font(.footnote)
-                            }
-                        }
-                        if let msg = detectMessage {
-                            HStack {
-                                Spacer()
-                                Text(msg)
-                                    .foregroundColor(detectMessageColor)
-                                    .font(.footnote)
-                            }
-                        }
-                    }
+                    localModelList
                 }
             }
 
@@ -685,97 +680,184 @@ struct PreferencesView: View {
         return ""
     }
 
-    private func browseForPython() {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = true
-        panel.canChooseDirectories = false
-        panel.allowsMultipleSelection = false
-        panel.title = "Select Python executable"
-        if panel.runModal() == .OK, let url = panel.url {
-            settings.updatePythonPath(with: url)
-        }
-    }
+    // MARK: - Local Models
 
-    @State private var detectMessage: String?
-    @State private var detectMessageColor: Color = .secondary
-    @State private var testPythonMessage: String?
-    @State private var testPythonColor: Color = .secondary
-    @State private var testPythonInProgress: Bool = false
-
-    private func detectPython() {
-        if let path = AppSettings.shared.resolvePythonExecutable() {
-            settings.pythonExecutablePath = path
-            detectMessageColor = .green
-            detectMessage = "Found: \(path)"
-        } else {
-            detectMessageColor = .red
-            detectMessage = "Could not find Python (python3). Install Python and openai-whisper, or browse to your env's Python."
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { detectMessage = nil }
-    }
-
-    private func testPython() {
-        guard let pythonPath = AppSettings.shared.resolvePythonExecutable() else {
-            testPythonColor = .red
-            testPythonMessage = "Set a valid Python executable first."
-            DispatchQueue.main.asyncAfter(deadline: .now() + 6) { testPythonMessage = nil }
-            return
-        }
-        testPythonInProgress = true
-        testPythonMessage = "Testing…"
-        testPythonColor = .secondary
-        DispatchQueue.global(qos: .userInitiated).async {
-            let code = """
-import sys, traceback
-print("PY:" + sys.executable)
-try:
-    import whisper as m
-    print("WH:" + str(getattr(m, "__file__", "")))
-    print("OK")
-except Exception as e:
-    print("ERR:" + str(e))
-    traceback.print_exc()
-"""
-            let proc = Process()
-            proc.executableURL = URL(fileURLWithPath: pythonPath)
-            proc.arguments = ["-c", code]
-            let pipe = Pipe()
-            proc.standardOutput = pipe
-            proc.standardError = pipe
-            var resultText = ""
-            do {
-                try AppSettings.shared.withWhisperAccess {
-                    try proc.run()
+    private var localModelList: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            VStack(spacing: 4) {
+                ForEach(LocalModel.catalog) { model in
+                    LocalModelRow(
+                        model: model,
+                        state: modelManager.state(for: model),
+                        isSelected: settings.localModel == model.id,
+                        onSelect: { select(model) },
+                        onDownload: { modelManager.download(model) },
+                        onCancel: { modelManager.cancelDownload(model) },
+                        onDelete: { modelPendingDeletion = model }
+                    )
                 }
-            } catch {
-                resultText = "Launch failed: \(error.localizedDescription)"
             }
-            if proc.isRunning { proc.waitUntilExit() }
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            let output = String(data: data, encoding: .utf8) ?? ""
-            DispatchQueue.main.async {
-                self.testPythonInProgress = false
-                let text = resultText.isEmpty ? output : (resultText + "\n" + output)
-                let lines = text.split(separator: "\n").map(String.init)
-                var pyPath: String?
-                var whPath: String?
-                var hasOK = false
-                var errLine: String?
-                for line in lines {
-                    if line.hasPrefix("PY:") { pyPath = String(line.dropFirst(3)) }
-                    if line.hasPrefix("WH:") { whPath = String(line.dropFirst(3)) }
-                    if line.hasPrefix("ERR:") { errLine = String(line.dropFirst(4)) }
-                    if line.trimmingCharacters(in: .whitespacesAndNewlines) == "OK" { hasOK = true }
+
+            Text("Models run entirely on this Mac — your audio never leaves it. Bigger models are more accurate but take longer to transcribe.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .padding(.top, 4)
+        }
+        .alert(
+            "Download \(modelPendingDownload?.name ?? "model")?",
+            isPresented: Binding(
+                get: { modelPendingDownload != nil },
+                set: { if !$0 { modelPendingDownload = nil } }
+            ),
+            presenting: modelPendingDownload
+        ) { model in
+            Button("Download") {
+                withAnimation(.snappy(duration: 0.25)) { settings.localModel = model.id }
+                modelManager.download(model)
+            }
+            .keyboardShortcut(.defaultAction)
+            Button("Cancel", role: .cancel) {}
+        } message: { model in
+            Text("\(model.name) isn't on this Mac yet. It's a \(model.downloadSize) download, and you can delete it any time.")
+        }
+        .alert(
+            "Delete \(modelPendingDeletion?.name ?? "model")?",
+            isPresented: Binding(
+                get: { modelPendingDeletion != nil },
+                set: { if !$0 { modelPendingDeletion = nil } }
+            ),
+            presenting: modelPendingDeletion
+        ) { model in
+            Button("Delete", role: .destructive) { modelManager.delete(model) }
+            Button("Cancel", role: .cancel) {}
+        } message: { model in
+            Text("This frees \(model.downloadSize). You can download it again later.")
+        }
+    }
+
+    /// Choosing a model that isn't on this Mac yet asks before starting a download.
+    private func select(_ model: LocalModel) {
+        switch modelManager.state(for: model) {
+        case .ready, .downloading, .preparing:
+            withAnimation(.snappy(duration: 0.25)) { settings.localModel = model.id }
+        case .notDownloaded, .failed:
+            modelPendingDownload = model
+        }
+    }
+
+    private struct LocalModelRow: View {
+        let model: LocalModel
+        let state: LocalModelManager.State
+        let isSelected: Bool
+        let onSelect: () -> Void
+        let onDownload: () -> Void
+        let onCancel: () -> Void
+        let onDelete: () -> Void
+
+        var body: some View {
+            HStack(spacing: 12) {
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 17))
+                    .foregroundStyle(isSelected ? Color.accentColor : Color.secondary.opacity(0.6))
+                    .contentTransition(.symbolEffect(.replace))
+
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        Text(model.name).fontWeight(.medium)
+                        if model.isRecommended {
+                            Text("Recommended")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(Color.accentColor)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 1.5)
+                                .background(Capsule().fill(Color.accentColor.opacity(0.15)))
+                        }
+                    }
+                    statusLine
                 }
-                if hasOK {
-                    self.testPythonColor = .green
-                    self.testPythonMessage = "OK — Python: \(pyPath ?? pythonPath) | whisper: \(whPath ?? "<not found>")"
-                } else {
-                    self.testPythonColor = .red
-                    let err = errLine ?? lines.last ?? "Unknown error"
-                    self.testPythonMessage = "Failed — \(err)"
+
+                Spacer(minLength: 12)
+                trailingControl
+            }
+            .padding(.vertical, 8)
+            .padding(.horizontal, 10)
+            .background {
+                if isSelected {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color.accentColor.opacity(0.12))
                 }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 8) { self.testPythonMessage = nil }
+            }
+            .contentShape(Rectangle())
+            .onTapGesture(perform: onSelect)
+            .animation(.snappy(duration: 0.25), value: state)
+        }
+
+        @ViewBuilder
+        private var statusLine: some View {
+            switch state {
+            case .notDownloaded:
+                Text("\(model.summary)  ·  \(model.downloadSize)")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            case .downloading(let fraction):
+                Text("Downloading… \(Int(fraction * 100))% of \(model.downloadSize)")
+                    .font(.footnote.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            case .preparing:
+                Text("Getting it ready — this can take a minute the first time.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            case .ready:
+                Text("\(Image(systemName: "checkmark"))  Downloaded  ·  \(model.downloadSize)")
+                    .font(.footnote)
+                    .foregroundStyle(Color.green)
+            case .failed(let message):
+                Text(message)
+                    .font(.footnote)
+                    .foregroundStyle(Color.red)
+                    .lineLimit(2)
+            }
+        }
+
+        @ViewBuilder
+        private var trailingControl: some View {
+            switch state {
+            case .notDownloaded:
+                Button(action: onDownload) {
+                    Label("Download", systemImage: "arrow.down.circle")
+                }
+                .glassButton()
+            case .failed:
+                Button("Retry", action: onDownload).glassButton()
+            case .downloading(let fraction):
+                Button(action: onCancel) {
+                    ZStack {
+                        Circle().stroke(Color.primary.opacity(0.12), lineWidth: 3)
+                        Circle()
+                            .trim(from: 0, to: max(fraction, 0.02))
+                            .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                            .rotationEffect(.degrees(-90))
+                            .animation(.linear(duration: 0.2), value: fraction)
+                        Image(systemName: "stop.fill")
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundStyle(Color.accentColor)
+                    }
+                    .frame(width: 24, height: 24)
+                    .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .help("Stop download")
+            case .preparing:
+                ProgressView().controlSize(.small)
+            case .ready:
+                Button(action: onDelete) {
+                    Image(systemName: "trash")
+                        .foregroundStyle(.secondary)
+                        .frame(width: 24, height: 24)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Delete \(model.name)")
             }
         }
     }
